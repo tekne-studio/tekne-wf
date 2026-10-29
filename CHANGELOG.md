@@ -4,6 +4,10 @@ Versions follow semver; the commit type is the bump (`feat` minor, `fix`
 patch, a breaking change minor while below 1.0). Entries are distilled from
 the commits.
 
+## 0.8.1
+
+The package's docs, decisions and code comments describe the projects wf runs in by their shape and name none of them. Nothing else changes, and upgrading needs no step.
+
 ## 0.8.0
 
 The rules block in `AGENTS.md` keeps only what every agent needs at every turn; `wf --skill` prints the rest for the role the checkout plays, and the project section of `AGENTS.md` becomes the orchestrator's.

@@ -1,6 +1,6 @@
 {
 	"name": "@tekne/wf",
-	"version": "0.8.0",
+	"version": "0.8.1",
 	"description": "The studio's flow for parallel coding agents: an orchestrator starts visible agents in herdr worktrees, watches them, checks and ships their work.",
 	"license": "MIT",
 	"repository": {
