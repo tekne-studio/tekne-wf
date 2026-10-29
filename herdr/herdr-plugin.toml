@@ -1,0 +1,25 @@
+# herdr plugin for wf: prepares each new worktree of a repository that uses wf, and calls
+# the person when one of its agents stays blocked, with that repository's own wf. One per
+# machine, for every project:
+#   herdr plugin install tekne-studio/tekne-wf/herdr
+# or, from a clone: herdr plugin link "$PWD/herdr"
+id = "tekne.wf"
+name = "wf"
+version = "0.1.0"
+min_herdr_version = "0.9.3"
+description = "Prepares each new worktree of a repository that uses wf and calls the person when its agent blocks"
+platforms = ["macos", "linux"]
+
+[[events]]
+on = "worktree.created"
+command = ["bun", "plugin.ts"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["bun", "plugin.ts"]
+
+[[actions]]
+id = "prepare"
+title = "wf: prepare this worktree"
+contexts = ["workspace"]
+command = ["bun", "plugin.ts"]

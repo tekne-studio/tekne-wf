@@ -1,0 +1,36 @@
+{
+	"name": "@tekne/wf",
+	"version": "0.8.0",
+	"description": "The studio's flow for parallel coding agents: an orchestrator starts visible agents in herdr worktrees, watches them, checks and ships their work.",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/tekne-studio/tekne-wf.git"
+	},
+	"keywords": ["agents", "worktrees", "herdr", "orchestration"],
+	"type": "module",
+	"bin": {
+		"wf": "src/cli.ts"
+	},
+	"exports": {
+		"./config": "./src/config.ts",
+		"./package.json": "./package.json"
+	},
+	"files": ["src", "templates", "herdr", "docs/proposal.md", "docs/spec.md", "docs/decisions", "README.md", "CHANGELOG.md"],
+	"publishConfig": {
+		"registry": "https://npm.tekne.studio"
+	},
+	"scripts": {
+		"wf": "src/cli.ts",
+		"kb": "kb",
+		"check": "tsc",
+		"test": "bun test",
+		"test:herdr": "bun test ./contract/",
+		"release": "bun scripts/release.ts"
+	},
+	"devDependencies": {
+		"@tekne/kb": "^0.5.0",
+		"@types/bun": "^1.4.3",
+		"typescript": "^7.0.2"
+	}
+}

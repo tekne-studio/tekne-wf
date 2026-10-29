@@ -1,0 +1,3 @@
+[test]
+# `bun test` with no path runs tests/ alone: contract/ talks to the real herdr, by `bun run test:herdr`
+root = "tests"
