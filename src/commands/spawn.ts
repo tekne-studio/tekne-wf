@@ -5,9 +5,9 @@ import { git } from '../git';
 import { renderHeader } from '../header';
 import { hasKb } from '../rules';
 import * as herdr from '../herdr';
-import { KINDS, isKind, type KindSpec } from '../kinds';
+import { KINDS, isKind, startArgs, type KindSpec } from '../kinds';
 import { branchFor, checkName, worktreePath } from '../state';
-import { claudeTrusts, currentSession } from '../claude';
+import { currentSession } from '../claude';
 import { prepareWorktree } from './prepare';
 import { PLUGIN_ID } from './setup';
 
@@ -33,6 +33,8 @@ const STARTED: herdr.Agent['agent_status'][] = ['working', 'blocked', 'done'];
 const settleMs = () => Number(process.env.WF_SETTLE_MS ?? 3000);
 /** How long herdr may take to see the agent in its pane after its command, as long as `herdr agent start` waits. */
 const LAUNCH_MS = 60_000;
+/** How long the person has to answer a dialog while the agent starts. */
+const ANSWER_MS = 600_000;
 
 /**
  * The agent's state proves it took the prompt: changed since `seq`, and still working
@@ -40,7 +42,7 @@ const LAUNCH_MS = 60_000;
  * a long paste, Claude Code now and then keeps the text in its input box and drops the
  * Enter, while herdr reports success, having seen a flicker of activity.
  */
-async function took(name: string, seq: number): Promise<boolean> {
+export async function took(name: string, seq: number): Promise<boolean> {
 	for (const pause of [settleMs(), settleMs() / 3]) {
 		await Bun.sleep(pause);
 		const a = await herdr.agentGet(name);
@@ -55,8 +57,8 @@ async function took(name: string, seq: number): Promise<boolean> {
  * (Claude Code just started, herdr answering success) is sent once more. herdr's JSON does
  * not show the box, so the Enter is the probe: it submits a held prompt, and an agent still
  * not started after it had an empty box. Only for an agent just started in its own pane,
- * where nobody types yet: every later message goes as a session message (SendMessage, or
- * `wf tell`), which never types into a pane.
+ * where nobody types yet: every later message goes by `wf tell`, which types into a pane
+ * only for a kind with no session, once, and only while the agent is stopped.
  */
 export async function sendFirstPrompt(name: string, pane: string, text: string, seq: number, what: { is: string; file?: string }): Promise<void> {
 	await herdr.agentPrompt(name, text);
@@ -77,14 +79,32 @@ export async function sendFirstPrompt(name: string, pane: string, text: string, 
 }
 
 /**
- * Starts the agent from its pane's shell, its first prompt among the arguments, and names
- * it. Claude Code's input box can lose a prompt typed while it starts, and herdr's JSON does
+ * A kind that asks to trust each new folder stops at that question in the new worktree,
+ * before herdr may see the agent. The answer is the person's: wf calls them and reads the
+ * kind's own record until it holds the folder trusted, typing nothing, since a prompt's
+ * Enter would answer the question.
+ */
+async function trusted(name: string, pane: string, path: string, spec: KindSpec): Promise<void> {
+	if (spec.trusts(path) === true) return;
+	const shown = await herdr.notify(`wf: ${name} waits for you`, `pane ${pane}: ${spec.title} asks whether to trust the new worktree; answer it there`, 'request');
+	console.log(`… ${spec.title} asks whether to trust ${path}; ${shown ? 'the person was called' : 'the call to the person did not go out'} (pane ${pane}). Waiting up to ${ANSWER_MS / 60_000} minutes.`);
+	const end = Date.now() + ANSWER_MS;
+	while (spec.trusts(path) !== true) {
+		if (Date.now() >= end) throw new WfError(`${spec.title} has not trusted ${path} within ${ANSWER_MS / 60_000} minutes: look at pane ${pane}; \`bun wf close ${name} --delete-branch\` removes the worktree`);
+		await Bun.sleep(1000);
+	}
+}
+
+/**
+ * Starts the agent from its pane's shell, its first prompt among the arguments when its kind
+ * takes one, and names it. Claude Code's input box can lose a prompt typed while it starts, and herdr's JSON does
  * not show the box; the pane's tty keeps what reaches a shell. `herdr agent start` would
  * wait for an idle box, past the whole first turn, so wf names the agent herdr sees in the
  * pane. Returns the agent once herdr tells its state.
  */
-async function launch(name: string, pane: string, command: string, args: string[]): Promise<herdr.Agent> {
-	await herdr.paneRun(pane, command, args);
+async function launch(name: string, pane: string, path: string, spec: KindSpec, args: string[]): Promise<herdr.Agent> {
+	await herdr.paneRun(pane, spec.herdr, args);
+	if (spec.trust === 'folder') await trusted(name, pane, path, spec);
 	const end = Date.now() + LAUNCH_MS;
 	let p = await herdr.paneGet(pane);
 	herdr.setEcho(false);
@@ -122,8 +142,12 @@ export async function spawnCommand(args: string[], opt: Options): Promise<void> 
 	if (!(await git(main, 'rev-parse', '--quiet', '--verify', `refs/heads/${config.integration}`))) throw new WfError(`the integration branch ${config.integration} does not exist`);
 	await herdrReady();
 	if ((await herdr.agentList()).some((a) => a.name === name)) throw new WfError(`an agent named ${name} is already live in herdr`);
-	if (spec.trust && claudeTrusts(main) !== true)
-		throw new WfError(`Claude Code has not trusted ${main} yet, so the agent would stop at the trust question: open Claude once in ${main} and confirm, then spawn again`);
+	const integration = (await herdr.integrations())[spec.integration];
+	if (!integration || integration === 'not installed')
+		throw new WfError(`herdr's ${spec.integration} integration is ${integration ?? 'missing'}, so herdr cannot tell the agent working, blocked or done: \`herdr integration install ${spec.integration}\`, then spawn again`);
+	if (integration !== 'current') console.error(`! herdr's ${spec.integration} integration is ${integration}: \`herdr integration install ${spec.integration}\` updates it`);
+	if (spec.trust === 'repository' && spec.trusts(main) !== true)
+		throw new WfError(`${spec.title} has not trusted ${main} yet, so the agent would stop at the trust question: open ${spec.title} once in ${main} and confirm, then spawn again`);
 	if (!(await herdr.pluginIds()).includes(PLUGIN_ID))
 		console.error(`! the herdr plugin ${PLUGIN_ID} is not installed: the person is called for a blocked agent only while \`bun wf watch\` runs (\`bun wf doctor\`)`);
 
@@ -145,20 +169,20 @@ export async function spawnCommand(args: string[], opt: Options): Promise<void> 
 
 	// --- Agent ----------------------------------------------------------------
 	const model = opt.model?.trim() || undefined;
-	const startArgs = [...(config.agent.args ?? spec.start(name)), ...spec.always, ...(model ? spec.model(model) : [])];
-	let agent = await launch(name, pane, spec.herdr, [...startArgs, ...(spec.prompt?.(prompt) ?? [])]);
+	const command = [...startArgs(kind, name, config), ...(model ? spec.model(model) : [])];
+	let agent = await launch(name, pane, path, spec, [...command, ...(spec.prompt?.(prompt) ?? [])]);
 	// a stop at this state is from before the task: watch reads the agent from the moment the meta exists
 	const seq = agent.state_change_seq;
 	if (agent.agent_status === 'blocked') {
 		// a dialog before the agent takes its prompt (a trust or setup question) is the person's; past it, the agent goes on to its prompt
 		const shown = await herdr.notify(`wf: ${name} waits for you`, `pane ${pane}: the agent stopped while starting; answer it there`, 'request');
-		console.log(`… ${name} stopped while starting; ${shown ? 'the person was called' : 'the call to the person did not go out'} (pane ${pane}). Waiting up to 10 minutes.`);
-		await herdr.agentWait(name, ['working', 'idle', 'done'], 600_000);
+		console.log(`… ${name} stopped while starting; ${shown ? 'the person was called' : 'the call to the person did not go out'} (pane ${pane}). Waiting up to ${ANSWER_MS / 60_000} minutes.`);
+		await herdr.agentWait(name, ['working', 'idle', 'done'], ANSWER_MS);
 		agent = await herdr.agentGet(name);
 	}
 	const now = new Date().toISOString();
 	state.writeMeta(name, { kind, model, workspace, pane, path, spawnedAt: now, sentAt: now, sentSeq: seq, orchestrator });
-	if (!STARTED.includes(agent.agent_status) && !(await took(name, agent.state_change_seq))) {
+	if (!STARTED.includes(agent.agent_status) && !(spec.prompt && (await took(name, agent.state_change_seq)))) {
 		// a kind with no prompt argument, or a prompt the agent did not take: typed, in a pane nobody types in yet
 		if (spec.prompt) console.error(`! ${name} has not started on the prompt it was started with: typing it in pane ${pane}`);
 		await sendFirstPrompt(name, pane, prompt, (await herdr.agentGet(name)).state_change_seq, { is: 'task', file: taskPath });

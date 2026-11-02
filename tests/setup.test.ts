@@ -68,7 +68,7 @@ test('doctor names what is missing and how to fix it, and never fixes trust itse
 	expect(res.out).toContain('✗ herdr 0.12.0 is outside the tested range');
 	expect(res.out).toContain('✗ herdr plugin tekne.wf is not installed: nobody calls the person');
 	expect(res.out).toContain('herdr integration install claude');
-	expect(res.out).toContain(`open Claude once in ${r.main} and confirm`);
+	expect(res.out).toContain(`open Claude Code once in ${r.main} and confirm`);
 	expect(JSON.parse(readFileSync(join(claudeDir, '.claude.json'), 'utf8')).projects[r.main].hasTrustDialogAccepted).toBe(false);
 });
 

@@ -6,13 +6,13 @@ import type { Options } from '../cli';
 import { WfError, anywhere, inMain, inWorktree } from '../context';
 import { branchOf, git } from '../git';
 import * as herdr from '../herdr';
-import { KINDS } from '../kinds';
+import { KINDS, type Kind, type KindSpec, kindOf, startArgs } from '../kinds';
 import { agentIn, closeWorktree, workspaceFor } from '../ship';
-import { branchFor, nameFromBranch, readKeys } from '../state';
+import { type State, branchFor, nameFromBranch, readKeys } from '../state';
 import { markDelivered, nextAction, stateWord } from '../watch';
 import { NO_WATCH, START_WATCH, ago, answerBy, noAgent, noAgentFix, snapshotOf, watchLines, worktreeAgents } from '../worktrees';
 import { callPerson } from './alert';
-import { herdrReady, sendFirstPrompt } from './spawn';
+import { herdrReady, sendFirstPrompt, took } from './spawn';
 import { worktreeOf } from './ship';
 
 /**
@@ -21,7 +21,8 @@ import { worktreeOf } from './ship';
  * would merge with their half-written text and submit both. A session message arrives as
  * a message of its own and leaves the input box alone. Only a Claude Code session can send
  * one (SendMessage), so tell finds the agent's session and prints what to send; when none
- * can carry it, it says so and types nothing.
+ * can carry it, it says so and types nothing. A kind with no session gets it typed, while
+ * stopped.
  */
 export async function tellCommand(args: string[], _: Options): Promise<void> {
 	const [name, ...words] = args;
@@ -30,6 +31,8 @@ export async function tellCommand(args: string[], _: Options): Promise<void> {
 	const { state } = await anywhere();
 	const agent = (await herdr.agentList()).find((a) => a.name === name);
 	if (!agent) throw new WfError(`no live agent named ${name}: \`bun wf status\`, or \`bun wf resume ${name}\``);
+	const spec = kindOf(agent.agent);
+	if (spec && !spec.session) return typeTell(state, name, agent, spec, text);
 	const session = agentSession(agent);
 	if (!session)
 		throw new WfError(`${name}'s Claude Code session is not running (pane ${agent.pane_id}), so no session message reaches it, and wf never types into a pane: look at it there, or \`bun wf resume ${name}\``);
@@ -37,6 +40,25 @@ export async function tellCommand(args: string[], _: Options): Promise<void> {
 	state.touchSent(name, agent.state_change_seq);
 	if (agent.agent_status === 'blocked') console.log(`! ${name} is blocked on screen (pane ${agent.pane_id}): the message waits in its session until the person answers there`);
 	console.log(`Tell ${name} now, with SendMessage to "${session.name}": ${JSON.stringify(text)}`);
+}
+
+/**
+ * A message to an agent with no session, typed into its input box once and only while it is
+ * stopped (`idle` or `done`): its turn is over and the box waits for the next one. Working,
+ * it is mid-turn and the person may be typing their next words; blocked, the Enter would
+ * answer the dialog on screen, which is the person's. Typed once: a retry could submit the
+ * person's text, so a message the agent did not take is left to them.
+ */
+async function typeTell(state: State, name: string, agent: herdr.Agent, spec: KindSpec, text: string): Promise<void> {
+	if (agent.agent_status !== 'idle' && agent.agent_status !== 'done')
+		throw new WfError(
+			`${name} is ${agent.agent_status} (pane ${agent.pane_id}): a ${spec.title} agent has no session, so wf types a message into its pane only while it is stopped. Wait for it to stop (\`bun wf watch\` returns it), or type it in pane ${agent.pane_id} yourself`
+		);
+	state.touchSent(name, agent.state_change_seq);
+	await herdr.agentPrompt(name, text);
+	if (await took(name, agent.state_change_seq)) console.log(`✓ told ${name}: typed into its input box in pane ${agent.pane_id}, and it took the message`);
+	else
+		throw new WfError(`${name} has not started on the message typed into pane ${agent.pane_id}: look at the pane; \`herdr agent send-keys ${name} Enter\` submits what sits in its input box`);
 }
 
 /** A text from `--file`, or piped on stdin; `usage` says how when there is neither. */
@@ -78,7 +100,9 @@ export async function reportCommand(_: string[], opt: Options): Promise<void> {
 	console.log(`! the orchestrator runs no \`bun wf watch\` for ${repo}${shown ? ': the person was called' : ', and the call to the person did not go out'}`);
 	const recorded = meta?.orchestrator;
 	const session = recorded ? liveSession(recorded) : null;
-	if (session) {
+	const silent = session ? unsent(meta?.kind, agent) : null;
+	if (silent) console.log(`${silent.title} sends no session message: the orchestrator's next \`bun wf watch\` delivers the report. Stop here.`);
+	else if (session) {
 		ctx.state.writeDelivered(markDelivered(ctx.state.delivered(), { kind: 'report', name, at: ctx.state.reportTime(name) }));
 		console.log(`Tell the orchestrator now, with SendMessage to "${session.name}": "wf: ${name} reported in ${repo}: ${path}; read the diff and look at the screens, then \`bun wf ship ${name}\`". Then stop.`);
 	} else if (recorded) console.log(`The orchestrator's session (${recorded.name}) no longer runs. Stop here.`);
@@ -111,13 +135,16 @@ export async function askCommand(args: string[], opt: Options): Promise<void> {
 	const session = meta?.orchestrator ? liveSession(meta.orchestrator) : null;
 	const watch = meta ? ctx.state.watcherFor(meta) : null;
 	const agent = await agentIn(ctx.root);
-	const to = session || watch ? 'orchestrator' : 'person';
+	// with no watch, only the agent's own SendMessage would reach the orchestrator's session
+	const silent = session && !watch ? unsent(meta?.kind, agent) : null;
+	const to = watch || (session && !silent) ? 'orchestrator' : 'person';
 	const at = new Date().toISOString();
 	const path = ctx.state.writeQuestion(name, { question, at, seq: agent?.state_change_seq, to });
 	if (to === 'person') {
+		const why = silent ? `the orchestrator runs no \`bun wf watch\` for ${name}, and ${silent.title} sends no session message` : `no orchestrator runs for ${name}`;
 		if (await callPerson(ctx.state, repo, name, agent?.pane_id ?? meta?.pane ?? '?', false, question))
-			console.log(`✓ no orchestrator runs for ${name}: the person was called. Ask them in your pane now, then stop.`);
-		else console.log(`! no orchestrator runs for ${name}, and the call to the person did not go out: ask them in your pane now, then stop.`);
+			console.log(`✓ ${why}: the person was called. Ask them in your pane now, then stop.`);
+		else console.log(`! ${why}, and the call to the person did not go out: ask them in your pane now, then stop.`);
 		return;
 	}
 	console.log(`✓ question recorded for the orchestrator (${path})`);
@@ -127,6 +154,12 @@ export async function askCommand(args: string[], opt: Options): Promise<void> {
 		const text = `wf: ${name} asks, in ${repo}: ${question} (answer by ${answerBy(name, agent)})`;
 		console.log(`Ask the orchestrator now, with SendMessage to "${session!.name}": ${JSON.stringify(text)}. Then stop: the answer comes as a message.`);
 	}
+}
+
+/** The agent's kind when it has no SendMessage to send, by the kind `spawn` recorded or the one herdr reports; null for Claude Code, or a kind wf does not know. */
+function unsent(kind: Kind | undefined, agent: herdr.Agent | null): KindSpec | null {
+	const spec: KindSpec | undefined = kind ? KINDS[kind] : kindOf(agent?.agent);
+	return spec && !spec.session ? spec : null;
 }
 
 export async function resumeCommand(args: string[], _: Options): Promise<void> {
@@ -144,8 +177,8 @@ export async function resumeCommand(args: string[], _: Options): Promise<void> {
 	if (live) throw new WfError(`an agent is live in pane ${live.pane_id}: reach it by ${answerBy(name, await agentIn(root))}`);
 	const pane = panes[0]?.pane_id;
 	if (!pane) throw new WfError(`the workspace ${ws} has no pane`);
-	const spec = KINDS[meta.kind];
-	await herdr.agentStart(name, spec.herdr, pane, [...(config.agent.args ?? spec.start(name)), ...spec.always, ...(meta.model ? spec.model(meta.model) : []), ...spec.continue]);
+	const spec: KindSpec = KINDS[meta.kind];
+	await herdr.agentStart(name, spec.herdr, pane, [...startArgs(meta.kind, name, config), ...(meta.model ? spec.model(meta.model) : []), ...spec.continue]);
 	const nudge = `You were interrupted. Carry on with the task in ${state.taskPath(name)}; if it was done, run \`bun wf report\`.`;
 	const seq = (await herdr.agentGet(name)).state_change_seq;
 	state.writeMeta(name, { ...meta, workspace: ws, pane, sentAt: new Date().toISOString(), sentSeq: seq });

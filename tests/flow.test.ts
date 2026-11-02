@@ -31,7 +31,7 @@ function setup(o: { trusted?: boolean; herdr?: Parameters<typeof fakeHerdr>[0] }
 	cleanups.push(() => rmSync(home, { recursive: true, force: true }));
 	writeFileSync(join(home, '.claude.json'), JSON.stringify({ projects: { [r.main]: { hasTrustDialogAccepted: o.trusted ?? true } } }));
 	// WF_SETTLE_MS: the fake herdr changes state at once, so spawn need not give it seconds
-	const env = { ...process.env, CLAUDE_CONFIG_DIR: home, WF_WORKTREES_DIR: join(home, 'worktrees'), WF_SETTLE_MS: '0' };
+	const env = { ...process.env, CLAUDE_CONFIG_DIR: home, KIMI_CODE_HOME: join(home, '.kimi-code'), WF_WORKTREES_DIR: join(home, 'worktrees'), WF_SETTLE_MS: '0' };
 	const wf = (cwd: string, args: string[], stdin?: string, extra: Record<string, string> = {}) => {
 		const p = Bun.spawnSync(['bun', CLI, ...args], { cwd, env: { ...env, ...extra }, stdin: stdin === undefined ? 'ignore' : Buffer.from(stdin), stdout: 'pipe', stderr: 'pipe' });
 		return { code: p.exitCode, out: p.stdout.toString(), err: p.stderr.toString() };
@@ -158,7 +158,7 @@ test('spawn refuses before creating anything: untrusted repository, taken name, 
 	const s = setup({ trusted: false });
 	const r = s.wf(s.main, ['spawn', 'dash', '--task', s.task]);
 	expect(r.code).toBe(1);
-	expect(r.err).toContain('open Claude once in');
+	expect(r.err).toContain('open Claude Code once in');
 	expect(s.h.calls().some((c) => c[1] === 'create')).toBe(false);
 
 	git(s.main, 'branch', 'worktree/taken');
@@ -626,6 +626,104 @@ test('spawn --model passes the model to the agent, and resume keeps it', () => {
 	s.h.set(state);
 	expect(s.wf(s.main, ['resume', 'dash']).code).toBe(0);
 	expect(s.h.calls()).toContainEqual(['agent', 'start', 'dash', '--kind', 'claude', '--pane', 'w1:p1', '--timeout', '60000', '--', '--permission-mode', 'auto', '--name', 'dash', '--disallowedTools', 'AskUserQuestion', 'EnterPlanMode', '--model', 'fable', '--continue']);
+});
+
+/** herdr with its kimi integration installed; the person, called, trusts each new worktree in Kimi. */
+const KIMI = { integrations: { claude: 'current (v10)', kimi: 'current (v1)' }, trustOnCall: true };
+
+test('spawn --kind kimi starts Kimi Code with its own arguments, calls the person to trust the new worktree, types the task; resume continues it', () => {
+	const s = setup({ herdr: KIMI });
+	// the config's args are its kind's, Claude's: Kimi gets its own
+	writeFileSync(join(s.main, 'wf.config.ts'), CONFIG.replace("integration: 'dev',", "integration: 'dev',\n\tagent: { args: ['--permission-mode', 'acceptEdits'] },"));
+	const r = s.wf(s.main, ['spawn', 'dash', '--task', s.task, '--kind', 'kimi', '--model', 'k3']);
+	expect(r.err).not.toContain('✗');
+	expect(r.code).toBe(0);
+	const calls = s.h.calls();
+	// Kimi takes no first prompt as an argument of an interactive start: none on its command line
+	expect(calls).toContainEqual(['pane', 'run', 'w1:p1', "kimi '-y' '-m' 'k3'"]);
+	// Kimi asks to trust every folder it never saw: the person is called, and answers it in the pane
+	expect(calls).toContainEqual(['notification', 'show', 'wf: dash waits for you', '--body', 'pane w1:p1: Kimi Code asks whether to trust the new worktree; answer it there', '--sound', 'request']);
+	expect(r.out).toContain(`… Kimi Code asks whether to trust ${s.wtPath}; the person was called (pane w1:p1). Waiting up to 10 minutes.`);
+	// past it, the task is typed once, and taken
+	const prompt = `Your task is in ${join(s.main, '.git', 'wf', 'dash', 'task.md')}: read it and do it.`;
+	expect(calls.filter((c) => c[1] === 'prompt' || c[1] === 'send-keys')).toEqual([['agent', 'prompt', 'dash', prompt]]);
+	expect((s.h.state().agents![0] as FakeAgent).submitted).toEqual([prompt]);
+	const meta = JSON.parse(readFileSync(join(s.main, '.git', 'wf', 'dash', 'meta.json'), 'utf8'));
+	expect([meta.kind, meta.model]).toEqual(['kimi', 'k3']);
+	expect(r.out).toContain('· branch worktree/dash · kimi k3');
+
+	// resume continues the folder's latest session, with the same arguments, and types its nudge
+	const state = s.h.state();
+	state.agents = [];
+	s.h.set(state);
+	expect(s.wf(s.main, ['resume', 'dash']).code).toBe(0);
+	expect(s.h.calls()).toContainEqual(['agent', 'start', 'dash', '--kind', 'kimi', '--pane', 'w1:p1', '--timeout', '60000', '--', '-y', '-m', 'k3', '-c']);
+	expect((s.h.state().agents![0] as FakeAgent).submitted![0]).toStartWith('You were interrupted.');
+});
+
+test("spawn refuses before creating anything while herdr's integration for the kind is not installed", () => {
+	const s = setup({ herdr: { ...KIMI, integrations: { claude: 'current (v10)', kimi: 'not installed' } } });
+	const r = s.wf(s.main, ['spawn', 'dash', '--task', s.task, '--kind', 'kimi']);
+	expect(r.code).toBe(1);
+	expect(r.err).toContain("herdr's kimi integration is not installed, so herdr cannot tell the agent working, blocked or done: `herdr integration install kimi`, then spawn again");
+	expect(s.h.calls().some((c) => c[1] === 'create' || c[1] === 'run')).toBe(false);
+	expect(existsSync(s.wtPath)).toBe(false);
+});
+
+test('tell types into a Kimi agent\'s input box only while it is stopped, from a terminal too, and refuses while it works or waits on a dialog', () => {
+	const s = setup({ herdr: KIMI });
+	expect(s.wf(s.main, ['spawn', 'dash', '--task', s.task, '--kind', 'kimi']).code).toBe(0);
+	const before = s.h.calls().length;
+	const as = (agent_status: string, seq: number) => {
+		const state = s.h.state();
+		Object.assign(state.agents![0], { agent_status, state_change_seq: seq });
+		s.h.set(state);
+	};
+	// working on its task: mid-turn, and the person may be typing their next words
+	const working = s.wf(s.main, ['tell', 'dash', 'also', 'the', 'footer']);
+	expect(working.code).toBe(1);
+	expect(working.err).toContain('dash is working (pane w1:p1): a Kimi Code agent has no session, so wf types a message into its pane only while it is stopped. Wait for it to stop (`bun wf watch` returns it), or type it in pane w1:p1 yourself');
+	// blocked on a dialog: the Enter would answer it, and the dialog is the person's
+	as('blocked', 3);
+	expect(s.wf(s.main, ['tell', 'dash', 'hello']).err).toContain('dash is blocked (pane w1:p1)');
+	expect(s.h.calls().slice(before).some((c) => c[1] === 'prompt' || c[1] === 'send-keys')).toBe(false);
+
+	// stopped: typed once, and taken; the stop it answers is recorded, as for a session message
+	as('idle', 4);
+	const told = s.wf(s.main, ['tell', 'dash', 'also', 'the', 'footer']);
+	expect(told.err).not.toContain('✗');
+	expect(told.code).toBe(0);
+	expect(told.out).toContain('✓ told dash: typed into its input box in pane w1:p1, and it took the message');
+	expect(s.h.calls().slice(before).filter((c) => c[1] === 'prompt' || c[1] === 'send-keys')).toEqual([['agent', 'prompt', 'dash', 'also the footer']]);
+	expect((s.h.state().agents![0] as FakeAgent).submitted!.at(-1)).toBe('also the footer');
+	expect(JSON.parse(readFileSync(join(s.main, '.git', 'wf', 'dash', 'meta.json'), 'utf8')).sentSeq).toBe(4);
+});
+
+test('a Kimi agent sends no SendMessage: with no watch, its report waits for the next watch, and its question goes to the person', () => {
+	const s = setup({ herdr: KIMI });
+	s.session(process.pid, 's-orch', 'orch');
+	expect(s.wf(s.main, ['spawn', 'dash', '--task', s.task, '--kind', 'kimi'], undefined, { CLAUDE_PID: String(process.pid) }).code).toBe(0);
+	const report = s.wf(s.wtPath, ['report'], 'Done.\n');
+	expect(report.out).toContain('! the orchestrator runs no `bun wf watch` for main: the person was called');
+	expect(report.out).toContain("Kimi Code sends no session message: the orchestrator's next `bun wf watch` delivers the report. Stop here.");
+	expect(report.out).not.toContain('SendMessage to');
+	expect(s.wf(s.main, ['watch', '--timeout', '300'], undefined, { CLAUDE_PID: String(process.pid) }).out).toContain('report dash:');
+
+	const ask = s.wf(s.wtPath, ['ask', 'Which', 'title?']);
+	expect(ask.out).toContain('✓ the orchestrator runs no `bun wf watch` for dash, and Kimi Code sends no session message: the person was called. Ask them in your pane now, then stop.');
+	expect(ask.out).not.toContain('SendMessage');
+	expect(JSON.parse(readFileSync(join(s.main, '.git', 'wf', 'dash', 'question.json'), 'utf8')).to).toBe('person');
+});
+
+test("doctor checks herdr's integration for each kind in use, the config's and each worktree's, and reads trust only for a kind that asks once per repository", () => {
+	const s = setup({ herdr: KIMI });
+	expect(s.wf(s.main, ['spawn', 'dash', '--task', s.task, '--kind', 'kimi']).code).toBe(0);
+	s.h.set({ ...s.h.state(), integrations: { claude: 'current (v10)', kimi: 'not installed' } });
+	const r = s.wf(s.main, ['doctor']);
+	expect(r.out).toContain('✓ herdr integration claude: working, blocked and done tell apart');
+	expect(r.out).toContain('✗ herdr integration kimi: not installed\n    herdr integration install kimi');
+	expect(r.out).toContain(`✓ Claude Code trusts ${s.main}`);
+	expect(r.out).not.toContain('Kimi Code');
 });
 
 test('close refuses uncommitted work, then closes by path and keeps the branch unless asked', () => {

@@ -1,8 +1,8 @@
 // A herdr for the tests, run through HERDR_BIN_PATH (tests/fake-herdr). Its state is a
 // JSON file in $FAKE_HERDR; every call is appended to calls.jsonl there, so a test reads
 // what wf asked herdr to do. Worktrees it creates are real git worktrees.
-import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 
 export type FakeState = {
 	version?: string;
@@ -35,6 +35,11 @@ export type FakeState = {
 	promptLost?: number;
 	/** herdr's answer to `notification show`: `shown`, or why it showed nothing */
 	notification?: 'shown' | 'disabled' | 'rate_limited' | 'no_foreground_client' | 'busy';
+	/**
+	 * The person, called, answers Kimi Code's "Trust this folder?" in each worktree: Kimi
+	 * records each one trusted in `$KIMI_CODE_HOME/workspace-trust/`, as it does
+	 */
+	trustOnCall?: boolean;
 	/** `worktree remove` takes this long after the agent leaves, as removing a big folder does */
 	removeMs?: number;
 	/** `agent list` fails, as with the server down */
@@ -84,6 +89,11 @@ if (a === 'integration' && b === 'status') {
 	process.exit(0);
 }
 if (a === 'plugin' && b === 'list') ok({ plugins: (state.plugins ?? []).map((plugin_id) => ({ plugin_id, enabled: true })) });
+if (a === 'notification' && b === 'show' && state.trustOnCall && (state.notification ?? 'shown') === 'shown') {
+	const trust = join(process.env.KIMI_CODE_HOME!, 'workspace-trust');
+	mkdirSync(trust, { recursive: true });
+	for (const w of state.worktrees ?? []) writeFileSync(join(trust, `wd_${basename(w.path)}`), JSON.stringify({ root: w.path, trustedAt: Date.now() }));
+}
 if (a === 'notification' && b === 'show') ok({ type: 'notification_show', shown: (state.notification ?? 'shown') === 'shown', reason: state.notification ?? 'shown' });
 if (a === 'worktree' && b === 'list') ok({ worktrees: state.worktrees ?? [] });
 if (a === 'worktree' && b === 'create') {
@@ -168,7 +178,7 @@ if (a === 'agent' && b === 'start') {
 		cwd: wt?.path ?? '/',
 		agent_status: state.startBlocked ? 'blocked' : 'idle',
 		state_change_seq: 1,
-		agent_session: { agent: flag('--kind'), kind: 'id', source: 'herdr:claude', value: `session-${name}` }
+		agent_session: { agent: flag('--kind'), kind: 'id', source: `herdr:${flag('--kind')}`, value: `session-${name}` }
 	});
 	save();
 	if (state.startBlocked) err('agent_not_ready');
@@ -180,7 +190,7 @@ if (a === 'agent' && b === 'rename') {
 	if (!agent) err('agent_not_found', `agent target ${target} not found`);
 	agent!.name = name;
 	// the session herdr's hook reported, named after the agent so a test can record it
-	agent!.agent_session ??= { agent: agent!.agent, kind: 'id', source: 'herdr:claude', value: `session-${name}` };
+	agent!.agent_session ??= { agent: agent!.agent, kind: 'id', source: `herdr:${agent!.agent}`, value: `session-${name}` };
 	save();
 	ok({ agent, type: 'agent_info' });
 }

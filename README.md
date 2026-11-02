@@ -6,7 +6,7 @@ Parallel coding agents, each in its own git worktree and its own herdr pane, led
 
 | Step | Command | Who |
 |---|---|---|
-| Create a worktree, prepare it, start the agent, send the task | `bun wf spawn <name> --task <file> [--model <m>]` | orchestrator |
+| Create a worktree, prepare it, start the agent, send the task | `bun wf spawn <name> --task <file> [--kind <k>] [--model <m>]` | orchestrator |
 | Wait for the first thing to act on | `bun wf watch` (the harness's own background command) | orchestrator |
 | Message a running agent | SendMessage to its name; `bun wf tell <name> "<text>"`, then the SendMessage it prints, when the name misses its session | orchestrator, agents |
 | Ask a question, a choice or a plan to approve | `bun wf ask "<question>"` | agent |
@@ -37,9 +37,9 @@ Nothing waits on the watch alone:
 
 An agent's pane stays the person's:
 
-- **wf types into a pane once**, for the first prompt: the task from `spawn`, or the nudge from `resume`, into a pane just opened where nobody types yet. Then it checks that the agent took it: its state moves and stays working. A prompt left in the input box gets Enter once; one still unsent stops `spawn` with the pane and the command that sends it.
+- **wf types into a pane once**, for the first prompt: the task from `spawn`, or the nudge from `resume`, into a pane just opened where nobody types yet. Then it checks that the agent took it: its state moves and stays working. A prompt left in the input box gets Enter once; one still unsent stops `spawn` with the pane and the command that sends it. The one other time is a `tell` to an agent with no session (Kimi), below.
 - **No dialog on screen asks the person a question.** wf starts a Claude agent with `--disallowedTools AskUserQuestion EnterPlanMode`, so its questions and plans go by `bun wf ask`, and a blocked agent is one waiting on a permission, which stays the person's.
-- **Every later message is a Claude Code session message.** SendMessage to the agent's name reaches its session; `bun wf tell <name> "<text>"` finds the session when the name misses it, and prints the SendMessage that carries it. The agent's next turn records the answer, whoever started it. The message arrives as a message of its own and never touches the input box, so a sentence the person is halfway through stays as it was. With no session to carry it, or run outside Claude Code, `tell` says so and types nothing.
+- **Every later message is a Claude Code session message.** SendMessage to the agent's name reaches its session; `bun wf tell <name> "<text>"` finds the session when the name misses it, and prints the SendMessage that carries it. The agent's next turn records the answer, whoever started it. The message arrives as a message of its own and never touches the input box, so a sentence the person is halfway through stays as it was. With no session to carry it, or run outside Claude Code, `tell` says so and types nothing. An agent of a kind with no session (Kimi) gets the message typed once into its input box, from any shell, only while its turn is over (`idle` or `done`); while it works or waits on a dialog, `tell` refuses and types nothing.
 
 ## Set up a project
 
@@ -72,11 +72,17 @@ export default {
 | `gates.cheap`, `gates.expensive` | shell commands, in order; an agent runs the cheap ones in its worktree; `ship` runs all, the cheap first, and stops at the first that fails |
 | `docsOnly` | globs of the paths that count as docs; a delivery whose every file matches runs only the cheap gates |
 | `look` | the `KEY=value` file and keys with the URLs the person opens |
-| `agent` | `{ kind: 'claude', args }`; `args` replace `--permission-mode auto --name <name>` (`--disallowedTools AskUserQuestion EnterPlanMode` stays, and `bun wf spawn --model` adds `--model`, either way; `resume` uses them too) |
+| `agent` | `{ kind: 'claude' \| 'kimi', args }`; `args` replace the kind's start arguments (Claude: `--permission-mode auto --name <name>`; `--disallowedTools AskUserQuestion EnterPlanMode` stays, and `bun wf spawn --model` adds `--model`, either way; `resume` uses them too), and only for that kind: `spawn --kind` another gets its own |
 | `header` | the project's lines for the task header |
 | `agentsFile` | default `AGENTS.md` |
 
-`bun wf gen` keeps the rules block in `AGENTS.md` current (between `<!-- wf:rules … -->` and `<!-- /wf:rules -->`, after kb's block when there is one); `bun wf check` fails when it is stale, so CI runs it. The block is short, what every agent needs at every turn, and points to `bun wf --skill`, which prints the rules of the role the checkout plays: the agent's in a worktree, the orchestrator's in the main checkout, both with `--all`. `bun wf doctor` checks herdr, the plugin, herdr's state integration, Claude's trust in the repository and the config, and warns of a worktree with no agent, of no watch running, and of each report waiting to ship.
+`bun wf gen` keeps the rules block in `AGENTS.md` current (between `<!-- wf:rules … -->` and `<!-- /wf:rules -->`, after kb's block when there is one); `bun wf check` fails when it is stale, so CI runs it. The block is short, what every agent needs at every turn, and points to `bun wf --skill`, which prints the rules of the role the checkout plays: the agent's in a worktree, the orchestrator's in the main checkout, both with `--all`. `bun wf doctor` checks herdr, the plugin, herdr's state integration for each kind in use (the config's, and each worktree's), Claude's trust in the repository and the config, and warns of a worktree with no agent, of no watch running, and of each report waiting to ship.
+
+## A Kimi Code agent
+
+`bun wf spawn <name> --task <file> --kind kimi [--model <alias>]` starts Kimi Code in the worktree in place of Claude Code, in its Ask When Needed mode (`-y`); `--model` takes an alias from Kimi's `config.toml`, and `resume` continues its session with `-c`. Once per machine first, with Kimi Code installed and logged in: `herdr integration install kimi`. Without it herdr loses the agent right after it starts, so `spawn` refuses and prints that command, and `doctor` names it for a kind in use.
+
+Kimi asks "Trust this folder?" for every folder it never saw, a worktree of a trusted repository included, so each spawn calls the person to answer it in the new pane; `spawn` waits until Kimi records the answer, then types the task. Kimi reads `AGENTS.md`, so the rules reach it. It has no session messages: `bun wf tell` types into its input box only while its turn is over, and with no `bun wf watch` running its report waits for the next watch and its question goes to the person.
 
 ## One machine, many repositories
 
@@ -95,7 +101,7 @@ It serves every repository that has a `wf.config.ts`, with that repository's own
 
 ## What wf never does
 
-- Answer an approval or a trust question: they are the person's. Claude Code asks trust once per repository (a worktree's trust is its main checkout's); `spawn` stops before acting when it is missing.
+- Answer an approval or a trust question: they are the person's. Claude Code asks trust once per repository (a worktree's trust is its main checkout's); `spawn` stops before acting when it is missing. Kimi Code asks in each new worktree; `spawn` calls the person and waits for the answer, typing nothing meanwhile.
 - Push or publish.
 - Work out of the person's sight: the orchestrator never edits in a worktree, and `status` and `doctor` mark a worktree with no agent.
 - Close a worktree by `$HERDR_WORKSPACE_ID`: it finds the workspace by path.

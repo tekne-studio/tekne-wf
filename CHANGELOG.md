@@ -4,6 +4,19 @@ Versions follow semver; the commit type is the bump (`feat` minor, `fix`
 patch, a breaking change minor while below 1.0). Entries are distilled from
 the commits.
 
+## Unreleased
+
+### Added
+
+- Kimi Code as an agent kind: `bun wf spawn <name> --task <file> --kind kimi [--model <alias>]` starts it with `-y` and types its task; `resume` continues it with `-c`. Kimi asks to trust each new worktree, so `spawn` calls the person to answer it in the pane and waits for Kimi's own record of the answer, typing nothing meanwhile.
+- `bun wf tell` to an agent with no session (Kimi) types the message into its input box once, only while herdr reports it `idle` or `done`, and checks that it took it; working, blocked or unknown, it refuses and names the state.
+- `bun wf spawn` refuses before creating anything while herdr's integration for the kind is not installed, printing `herdr integration install <kind>`; `bun wf doctor` checks the integration of every kind in use, the config's and each worktree's.
+
+### Fixed
+
+- The config's `agent.args` apply only to the config's kind: `spawn --kind` another starts it with its own arguments, and `resume` does the same.
+- An agent with no SendMessage (Kimi) is never told to send one: with no watch running, `report` leaves its report for the next watch, and `ask` calls the person.
+
 ## 0.8.1
 
 The package's docs, decisions and code comments describe the projects wf runs in by their shape and name none of them. Nothing else changes, and upgrading needs no step.

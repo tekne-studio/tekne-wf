@@ -2,14 +2,13 @@
 import { existsSync, lstatSync, readFileSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import type { Options } from '../cli';
-import { CONFIG_FILE, loadConfig } from '../config';
+import { CONFIG_FILE, type Resolved, loadConfig } from '../config';
 import { here } from '../context';
 import { branchOf } from '../git';
 import * as herdr from '../herdr';
-import { KINDS } from '../kinds';
+import { KINDS, type Kind, type KindSpec } from '../kinds';
 import { OPENER, rulesProblems } from '../rules';
 import { State } from '../state';
-import { claudeTrusts } from '../claude';
 import { NO_WATCH, START_WATCH, answerBy, noAgent, noAgentFix, snapshotOf, watchLines, worktreeAgents } from '../worktrees';
 
 export const PLUGIN_ID = 'tekne.wf';
@@ -100,7 +99,9 @@ export async function doctorCommand(_: string[], __: Options): Promise<number> {
 	const warn = (m: string, fix: string) => console.log(`! ${m}\n    ${fix}`);
 	herdr.setEcho(false);
 
-	let config;
+	let config: Resolved | undefined;
+	const kinds: Kind[] = [];
+	const inUse = (): KindSpec[] => [...new Set<Kind>([config?.agent.kind ?? 'claude', ...kinds])].map((k) => KINDS[k]);
 	try {
 		config = await loadConfig(c.root);
 		ok(`${CONFIG_FILE}: integration ${config.integration}, ${config.gates.cheap.length + config.gates.expensive.length} gates`);
@@ -132,20 +133,22 @@ export async function doctorCommand(_: string[], __: Options): Promise<number> {
 				'herdr plugin install tekne-studio/tekne-wf/herdr'
 			);
 
-		const kind = config?.agent.kind ?? 'claude';
-		const spec = KINDS[kind];
+		const worktrees = await worktreeAgents(c.main, await herdr.agentList());
+		const state = new State(c.commonDir);
+		const snap = snapshotOf(state, worktrees);
+		// the kinds in use: the config's, and each one `spawn --kind` started in a worktree
+		kinds.push(...Object.values(snap.metas).map((m) => m.kind));
 		const states = await herdr.integrations();
-		if (states[spec.integration] === 'current') ok(`herdr integration ${spec.integration}: working, blocked and done tell apart`);
-		else bad(`herdr integration ${spec.integration}: ${states[spec.integration] ?? 'unknown'}`, `herdr integration install ${spec.integration}`);
+		for (const integration of new Set(inUse().map((s) => s.integration))) {
+			if (states[integration] === 'current') ok(`herdr integration ${integration}: working, blocked and done tell apart`);
+			else bad(`herdr integration ${integration}: ${states[integration] ?? 'unknown'}`, `herdr integration install ${integration}`);
+		}
 
 		// a warning: a worktree between its agent's exit and a resume is the flow's own state,
 		// and what to do (resume, start, close) is the orchestrator's call, not the setup's
-		const worktrees = await worktreeAgents(c.main, await herdr.agentList());
 		const alone = worktrees.filter((w) => !w.agent);
-		const state = new State(c.commonDir);
 		for (const w of alone) warn(noAgent(w), noAgentFix(w, state));
 		if (worktrees.length && !alone.length) ok(`an agent the person can watch in each worktree (${worktrees.length})`);
-		const snap = snapshotOf(state, worktrees);
 		if (Object.keys(snap.metas).length) {
 			const { watch, waiting, asking } = watchLines(state, snap);
 			if (watch) ok(watch);
@@ -158,10 +161,11 @@ export async function doctorCommand(_: string[], __: Options): Promise<number> {
 		bad(`herdr did not answer: ${(e as Error).message}`, '`herdr status`');
 	}
 
-	if (KINDS[config?.agent.kind ?? 'claude'].trust) {
-		const trusted = claudeTrusts(c.main);
-		if (trusted) ok(`Claude Code trusts ${c.main} (and so every worktree of it)`);
-		else bad(`Claude Code has not trusted ${c.main}${trusted === null ? ' (its record could not be read)' : ''}`, `open Claude once in ${c.main} and confirm; wf never answers for you`);
+	// a kind that asks for each new folder is answered in the worktree's pane, at its spawn
+	for (const spec of inUse().filter((s) => s.trust === 'repository')) {
+		const trusted = spec.trusts(c.main);
+		if (trusted) ok(`${spec.title} trusts ${c.main} (and so every worktree of it)`);
+		else bad(`${spec.title} has not trusted ${c.main}${trusted === null ? ' (its record could not be read)' : ''}`, `open ${spec.title} once in ${c.main} and confirm; wf never answers for you`);
 	}
 	return failed ? 1 : 0;
 }
