@@ -45,7 +45,7 @@ At the platform on 2026-10-22, a task moved the project to wf 0.6.0 and added `d
 
 ### Agent kinds
 
-- Kimi as an agent kind, one row of `src/kinds.ts`: Kimi 2.1.1 starts with `--yolo` (routine work runs; risky actions and questions ask), continues with `--continue` and needs `herdr integration install kimi`; unchecked end to end. Codex is not on this machine.
+- Kimi end to end on this machine (the row shipped on 2026-11-02, checked only against the fake herdr): `herdr integration install kimi`, a read-only review task spawned with `--kind kimi` in another repo, the trust answer in the pane, `tell` while idle, `resume`, `ship`. Known risk: herdr's kimi hooks fire at session start and Kimi opens a session only on the first message, so the agent may not appear within the 60 s `spawn` waits. Codex is not on this machine.
 
 ### Changelog
 
