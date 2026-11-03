@@ -4,7 +4,9 @@ Versions follow semver; the commit type is the bump (`feat` minor, `fix`
 patch, a breaking change minor while below 1.0). Entries are distilled from
 the commits.
 
-## Unreleased
+## 0.9.0
+
+The orchestrator sizes each agent: `wf spawn --effort` picks the reasoning effort per task, and Kimi Code joins Claude Code as an agent kind.
 
 ### Added
 
