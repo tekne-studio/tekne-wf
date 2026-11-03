@@ -6,7 +6,7 @@ Parallel coding agents, each in its own git worktree and its own herdr pane, led
 
 | Step | Command | Who |
 |---|---|---|
-| Create a worktree, prepare it, start the agent, send the task | `bun wf spawn <name> --task <file> [--kind <k>] [--model <m>]` | orchestrator |
+| Create a worktree, prepare it, start the agent, send the task | `bun wf spawn <name> --task <file> [--kind <k>] [--model <m>] [--effort <e>]` | orchestrator |
 | Wait for the first thing to act on | `bun wf watch` (the harness's own background command) | orchestrator |
 | Message a running agent | SendMessage to its name; `bun wf tell <name> "<text>"`, then the SendMessage it prints, when the name misses its session | orchestrator, agents |
 | Ask a question, a choice or a plan to approve | `bun wf ask "<question>"` | agent |
@@ -72,7 +72,7 @@ export default {
 | `gates.cheap`, `gates.expensive` | shell commands, in order; an agent runs the cheap ones in its worktree; `ship` runs all, the cheap first, and stops at the first that fails |
 | `docsOnly` | globs of the paths that count as docs; a delivery whose every file matches runs only the cheap gates |
 | `look` | the `KEY=value` file and keys with the URLs the person opens |
-| `agent` | `{ kind: 'claude' \| 'kimi', args }`; `args` replace the kind's start arguments (Claude: `--permission-mode auto --name <name>`; `--disallowedTools AskUserQuestion EnterPlanMode` stays, and `bun wf spawn --model` adds `--model`, either way; `resume` uses them too), and only for that kind: `spawn --kind` another gets its own |
+| `agent` | `{ kind: 'claude' \| 'kimi', args }`; `args` replace the kind's start arguments (Claude: `--permission-mode auto --name <name>`; `--disallowedTools AskUserQuestion EnterPlanMode` stays, and `bun wf spawn --model` and `--effort` add `--model` and `--effort`, either way; `resume` uses them too), and only for that kind: `spawn --kind` another gets its own |
 | `header` | the project's lines for the task header |
 | `agentsFile` | default `AGENTS.md` |
 
@@ -80,7 +80,7 @@ export default {
 
 ## A Kimi Code agent
 
-`bun wf spawn <name> --task <file> --kind kimi [--model <alias>]` starts Kimi Code in the worktree in place of Claude Code, in its Ask When Needed mode (`-y`); `--model` takes an alias from Kimi's `config.toml`, and `resume` continues its session with `-c`. Once per machine first, with Kimi Code installed and logged in: `herdr integration install kimi`. Without it herdr loses the agent right after it starts, so `spawn` refuses and prints that command, and `doctor` names it for a kind in use.
+`bun wf spawn <name> --task <file> --kind kimi [--model <alias>]` starts Kimi Code in the worktree in place of Claude Code, in its Ask When Needed mode (`-y`); `--model` takes an alias from Kimi's `config.toml`, `--effort` is refused since Kimi's command line takes no effort, and `resume` continues its session with `-c`. Once per machine first, with Kimi Code installed and logged in: `herdr integration install kimi`. Without it herdr loses the agent right after it starts, so `spawn` refuses and prints that command, and `doctor` names it for a kind in use.
 
 Kimi asks "Trust this folder?" for every folder it never saw, a worktree of a trusted repository included, so each spawn calls the person to answer it in the new pane; `spawn` waits until Kimi records the answer, then types the task. Kimi reads `AGENTS.md`, so the rules reach it. It has no session messages: `bun wf tell` types into its input box only while its turn is over, and with no `bun wf watch` running its report waits for the next watch and its question goes to the person.
 

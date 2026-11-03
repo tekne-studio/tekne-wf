@@ -21,6 +21,8 @@ export type KindSpec = {
 	continue: string[];
 	/** arguments that pick the model, from `wf spawn --model` */
 	model: (model: string) => string[];
+	/** the levels `wf spawn --effort` takes, and the arguments that pick one; none for a kind whose CLI takes no effort */
+	effort?: { levels: string[]; args: (level: string) => string[] };
 	/** arguments, last on the command line, that hand the agent its first prompt as it starts; without them, `spawn` types it */
 	prompt?: (text: string) => string[];
 	/** herdr's state integration that tells working, blocked and done apart */
@@ -50,6 +52,7 @@ export const KINDS = {
 		always: ['--disallowedTools', 'AskUserQuestion', 'EnterPlanMode'],
 		continue: ['--continue'],
 		model: (model) => ['--model', model],
+		effort: { levels: ['low', 'medium', 'high', 'xhigh', 'max'], args: (level) => ['--effort', level] },
 		// `--` ends the options: `--disallowedTools` takes every word after it
 		prompt: (text) => ['--', text],
 		integration: 'claude',
@@ -66,6 +69,7 @@ export const KINDS = {
 		continue: ['-c'],
 		// an alias from Kimi's config.toml, not a provider's model id
 		model: (model) => ['-m', model],
+		// Kimi Code takes no effort on its command line
 		integration: 'kimi',
 		trust: 'folder',
 		trusts: kimiTrusts,
@@ -89,4 +93,9 @@ export function startArgs(kind: Kind, name: string, config: { agent: { kind: Kin
 	const spec: KindSpec = KINDS[kind];
 	const own = kind === config.agent.kind ? config.agent.args : null;
 	return [...(own ?? spec.start(name)), ...spec.always];
+}
+
+/** The arguments for the model and the effort `wf spawn` chose, which every later start of the agent reuses from its meta. */
+export function choiceArgs(spec: KindSpec, choice: { model?: string; effort?: string }): string[] {
+	return [...(choice.model ? spec.model(choice.model) : []), ...(choice.effort && spec.effort ? spec.effort.args(choice.effort) : [])];
 }

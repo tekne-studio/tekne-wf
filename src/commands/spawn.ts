@@ -5,7 +5,7 @@ import { git } from '../git';
 import { renderHeader } from '../header';
 import { hasKb } from '../rules';
 import * as herdr from '../herdr';
-import { KINDS, isKind, startArgs, type KindSpec } from '../kinds';
+import { KINDS, choiceArgs, isKind, startArgs, type KindSpec } from '../kinds';
 import { branchFor, checkName, worktreePath } from '../state';
 import { currentSession } from '../claude';
 import { prepareWorktree } from './prepare';
@@ -132,6 +132,12 @@ export async function spawnCommand(args: string[], opt: Options): Promise<void> 
 	const kind = opt.kind ?? config.agent.kind;
 	if (!isKind(kind)) throw new WfError(`unknown agent kind "${kind}" (known: ${Object.keys(KINDS).join(', ')})`);
 	const spec: KindSpec = KINDS[kind];
+	const model = opt.model?.trim() || undefined;
+	const effort = opt.effort?.trim() || undefined;
+	if (effort) {
+		if (!spec.effort) throw new WfError(`${spec.title} takes no effort on its command line: spawn it without --effort`);
+		if (!spec.effort.levels.includes(effort)) throw new WfError(`unknown effort "${effort}" for ${spec.title} (known: ${spec.effort.levels.join(', ')})`);
+	}
 	const task = await readTask(opt.task);
 
 	// --- Refusals, before anything is created -------------------------------
@@ -168,8 +174,7 @@ export async function spawnCommand(args: string[], opt: Options): Promise<void> 
 	const prompt = `Your task is in ${taskPath}: read it and do it.`;
 
 	// --- Agent ----------------------------------------------------------------
-	const model = opt.model?.trim() || undefined;
-	const command = [...startArgs(kind, name, config), ...(model ? spec.model(model) : [])];
+	const command = [...startArgs(kind, name, config), ...choiceArgs(spec, { model, effort })];
 	let agent = await launch(name, pane, path, spec, [...command, ...(spec.prompt?.(prompt) ?? [])]);
 	// a stop at this state is from before the task: watch reads the agent from the moment the meta exists
 	const seq = agent.state_change_seq;
@@ -181,7 +186,7 @@ export async function spawnCommand(args: string[], opt: Options): Promise<void> 
 		agent = await herdr.agentGet(name);
 	}
 	const now = new Date().toISOString();
-	state.writeMeta(name, { kind, model, workspace, pane, path, spawnedAt: now, sentAt: now, sentSeq: seq, orchestrator });
+	state.writeMeta(name, { kind, model, effort, workspace, pane, path, spawnedAt: now, sentAt: now, sentSeq: seq, orchestrator });
 	if (!STARTED.includes(agent.agent_status) && !(spec.prompt && (await took(name, agent.state_change_seq)))) {
 		// a kind with no prompt argument, or a prompt the agent did not take: typed, in a pane nobody types in yet
 		if (spec.prompt) console.error(`! ${name} has not started on the prompt it was started with: typing it in pane ${pane}`);
@@ -190,7 +195,7 @@ export async function spawnCommand(args: string[], opt: Options): Promise<void> 
 
 	const shown = Object.entries(urls).map(([k, v]) => `${k} ${v}`).join(' · ');
 	console.log(`\n✓ ${name} is working in ${path}`);
-	console.log(`  pane ${pane} (workspace ${workspace}) · branch ${branch} · ${kind}${model ? ` ${model}` : ''}`);
+	console.log(`  pane ${pane} (workspace ${workspace}) · branch ${branch} · ${[kind, model, effort].filter(Boolean).join(' ')}`);
 	if (shown) console.log(`  ${shown}`);
 	console.log(`  task: ${taskPath}`);
 	console.log('  next: `bun wf watch` in the background');

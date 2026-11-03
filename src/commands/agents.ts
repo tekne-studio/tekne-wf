@@ -6,7 +6,7 @@ import type { Options } from '../cli';
 import { WfError, anywhere, inMain, inWorktree } from '../context';
 import { branchOf, git } from '../git';
 import * as herdr from '../herdr';
-import { KINDS, type Kind, type KindSpec, kindOf, startArgs } from '../kinds';
+import { KINDS, type Kind, type KindSpec, choiceArgs, kindOf, startArgs } from '../kinds';
 import { agentIn, closeWorktree, workspaceFor } from '../ship';
 import { type State, branchFor, nameFromBranch, readKeys } from '../state';
 import { markDelivered, nextAction, stateWord } from '../watch';
@@ -178,7 +178,7 @@ export async function resumeCommand(args: string[], _: Options): Promise<void> {
 	const pane = panes[0]?.pane_id;
 	if (!pane) throw new WfError(`the workspace ${ws} has no pane`);
 	const spec: KindSpec = KINDS[meta.kind];
-	await herdr.agentStart(name, spec.herdr, pane, [...startArgs(meta.kind, name, config), ...(meta.model ? spec.model(meta.model) : []), ...spec.continue]);
+	await herdr.agentStart(name, spec.herdr, pane, [...startArgs(meta.kind, name, config), ...choiceArgs(spec, meta), ...spec.continue]);
 	const nudge = `You were interrupted. Carry on with the task in ${state.taskPath(name)}; if it was done, run \`bun wf report\`.`;
 	const seq = (await herdr.agentGet(name)).state_change_seq;
 	state.writeMeta(name, { ...meta, workspace: ws, pane, sentAt: new Date().toISOString(), sentSeq: seq });

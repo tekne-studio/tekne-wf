@@ -617,15 +617,19 @@ test('resume refuses while an agent is live, and starts it again with --continue
 	expect(s.h.calls()).toContainEqual(['agent', 'start', 'dash', '--kind', 'claude', '--pane', 'w1:p1', '--timeout', '60000', '--', '--permission-mode', 'auto', '--name', 'dash', '--disallowedTools', 'AskUserQuestion', 'EnterPlanMode', '--continue']);
 });
 
-test('spawn --model passes the model to the agent, and resume keeps it', () => {
+test('spawn --model and --effort pass the model and the effort to the agent, and resume keeps them', () => {
 	const s = setup();
-	expect(s.wf(s.main, ['spawn', 'dash', '--task', s.task, '--model', 'fable']).code).toBe(0);
+	const r = s.wf(s.main, ['spawn', 'dash', '--task', s.task, '--model', 'fable', '--effort', 'high']);
+	expect(r.code).toBe(0);
+	expect(r.out).toContain('· branch worktree/dash · claude fable high');
 	const state = s.h.state();
-	expect((state.agents![0] as FakeAgent).argv).toEqual(['--permission-mode', 'auto', '--name', 'dash', '--disallowedTools', 'AskUserQuestion', 'EnterPlanMode', '--model', 'fable', '--', expect.stringContaining('Your task is in')]);
+	expect((state.agents![0] as FakeAgent).argv).toEqual(['--permission-mode', 'auto', '--name', 'dash', '--disallowedTools', 'AskUserQuestion', 'EnterPlanMode', '--model', 'fable', '--effort', 'high', '--', expect.stringContaining('Your task is in')]);
+	const meta = JSON.parse(readFileSync(join(s.main, '.git', 'wf', 'dash', 'meta.json'), 'utf8'));
+	expect([meta.model, meta.effort]).toEqual(['fable', 'high']);
 	state.agents = [];
 	s.h.set(state);
 	expect(s.wf(s.main, ['resume', 'dash']).code).toBe(0);
-	expect(s.h.calls()).toContainEqual(['agent', 'start', 'dash', '--kind', 'claude', '--pane', 'w1:p1', '--timeout', '60000', '--', '--permission-mode', 'auto', '--name', 'dash', '--disallowedTools', 'AskUserQuestion', 'EnterPlanMode', '--model', 'fable', '--continue']);
+	expect(s.h.calls()).toContainEqual(['agent', 'start', 'dash', '--kind', 'claude', '--pane', 'w1:p1', '--timeout', '60000', '--', '--permission-mode', 'auto', '--name', 'dash', '--disallowedTools', 'AskUserQuestion', 'EnterPlanMode', '--model', 'fable', '--effort', 'high', '--continue']);
 });
 
 /** herdr with its kimi integration installed; the person, called, trusts each new worktree in Kimi. */
@@ -667,6 +671,18 @@ test("spawn refuses before creating anything while herdr's integration for the k
 	expect(r.code).toBe(1);
 	expect(r.err).toContain("herdr's kimi integration is not installed, so herdr cannot tell the agent working, blocked or done: `herdr integration install kimi`, then spawn again");
 	expect(s.h.calls().some((c) => c[1] === 'create' || c[1] === 'run')).toBe(false);
+	expect(existsSync(s.wtPath)).toBe(false);
+});
+
+test('spawn refuses an effort its kind does not take before creating anything: an unknown level, a kind with no effort', () => {
+	const s = setup({ herdr: KIMI });
+	const unknown = s.wf(s.main, ['spawn', 'dash', '--task', s.task, '--effort', 'highest']);
+	expect(unknown.code).toBe(1);
+	expect(unknown.err).toContain('unknown effort "highest" for Claude Code (known: low, medium, high, xhigh, max)');
+	const none = s.wf(s.main, ['spawn', 'dash', '--task', s.task, '--kind', 'kimi', '--effort', 'high']);
+	expect(none.code).toBe(1);
+	expect(none.err).toContain('Kimi Code takes no effort on its command line: spawn it without --effort');
+	expect(s.h.calls()).toEqual([]);
 	expect(existsSync(s.wtPath)).toBe(false);
 });
 

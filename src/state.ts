@@ -35,6 +35,8 @@ export type Meta = {
 	kind: Kind;
 	/** the model `wf spawn --model` chose; resume keeps it */
 	model?: string;
+	/** the effort `wf spawn --effort` chose; resume keeps it */
+	effort?: string;
 	workspace: string;
 	pane: string;
 	path: string;

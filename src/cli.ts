@@ -16,7 +16,7 @@ import { watchCommand } from './commands/watch';
 const HELP = `wf: parallel coding agents, each in its own herdr worktree, run by one orchestrator.
 
 In the main checkout (the orchestrator)
-  wf spawn <name> --task <file|-> [--kind <k>] [--model <m>]
+  wf spawn <name> --task <file|-> [--kind <k>] [--model <m>] [--effort <e>]
                                       worktree, preparation, agent and task, in one step
   wf watch [--timeout <ms>]           waits for the first thing to act on: blocked, question, report, idle, gone
   wf ship <name>… | --reported [--dry-run]
@@ -55,6 +55,7 @@ const { values: opt, positionals } = parseArgs({
 		task: { type: 'string' },
 		kind: { type: 'string' },
 		model: { type: 'string' },
+		effort: { type: 'string' },
 		file: { type: 'string' },
 		worktree: { type: 'string' },
 		pane: { type: 'string' },
