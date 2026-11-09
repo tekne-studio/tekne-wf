@@ -4,7 +4,9 @@ Versions follow semver; the commit type is the bump (`feat` minor, `fix`
 patch, a breaking change minor while below 1.0). Entries are distilled from
 the commits.
 
-## Unreleased
+## 0.9.1
+
+A patch for the watch: an agent whose turn ended while its own background shells still run is working, not stopped, so the orchestrator is no longer woken for nothing.
 
 ### Fixed
 
