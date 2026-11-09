@@ -22,6 +22,8 @@ export type FakeState = {
 	next?: number;
 	/** the shell pid of each pane, for `pane process-info` */
 	shells?: Record<string, number>;
+	/** the leader of each pane's foreground process group, for `pane process-info`: a real process, read through `ps` */
+	foreground?: Record<string, number>;
 	/**
 	 * The next this many Enters are lost, a prompt's own or `send-keys`: the text stays in
 	 * the input box and herdr answers the prompt with success all the same, as Claude Code
@@ -157,7 +159,7 @@ if (a === 'pane' && b === 'run') {
 }
 if (a === 'pane' && b === 'process-info') {
 	const pane = flag('--pane')!;
-	ok({ process_info: { pane_id: pane, shell_pid: state.shells?.[pane] ?? 1, foreground_processes: [] }, type: 'pane_process_info' });
+	ok({ process_info: { pane_id: pane, shell_pid: state.shells?.[pane] ?? 1, foreground_process_group_id: state.foreground?.[pane], foreground_processes: [] }, type: 'pane_process_info' });
 }
 if (a === 'pane' && b === 'list') {
 	const ws = flag('--workspace')!;

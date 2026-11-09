@@ -34,12 +34,23 @@ Every 2 s it reads `herdr agent list`, the reports and the questions, keeps the 
 | `blocked <name>` | `agent_status` is `blocked` at a `state_change_seq` not delivered, and still at it 8 s later (`herdr agent get`): a state that goes away by itself waits on nobody | calls the person when the plugin is not installed, and says whether herdr showed the call; otherwise says the plugin calls them |
 | `question <name>` | a question to the orchestrator (`wf ask`) still open (see `wf ask` in [the spec](spec.md#commands)), not delivered | prints the question and how to answer it, as the person's filter (the block's rule): SendMessage to the agent's session, or `wf tell` when none runs |
 | `report <name>` | `report.md` newer than the last delivered report | — |
-| `idle <name>` | `idle` or `done` at a new `state_change_seq` past `sentSeq` (a stop at it is from before the last prompt: the one a `tell` answers, or a new agent's before its task), with no report waiting and no question open (`wf ask`) | prints the last 20 lines (`herdr agent read`) and how to answer, as for a question |
+| `idle <name>` | `idle` or `done` at a new `state_change_seq` past `sentSeq` (a stop at it is from before the last prompt: the one a `tell` answers, or a new agent's before its task), with no report waiting, no question open (`wf ask`) and no [background shells](#background-shells) of its own still counting | prints the last 20 lines (`herdr agent read`) and how to answer, as for a question; past the shells' cap, the line names what still runs |
 | `gone <name>` | the worktree has a `meta.json` and no agent in its panes, read again before delivering: a worktree closed or shipped meanwhile is no news | — |
 
 Only the worktrees `wf spawn` started (a `meta.json`) are watched; one made by hand shows in `status` and `doctor`.
 
 It prints the event (the report itself for `report`, the screen for `idle`), records it as delivered, ends with "Start `bun wf watch` again in the background, then act" and exits `0`. The orchestrator starts it again before acting, so a second event during a long `ship` still wakes it; an event is never lost meanwhile, since `watch.json` keeps what was delivered.
+
+## Background shells
+
+An agent whose turn ended while its own background shells run is working: Claude Code resumes it when a shell ends, so that stop is no news ([why](decisions/2026-11-10-a-stopped-agent-with-its-own-background-shells-counts-as.md)). `herdr pane process-info` tells the pane's foreground process group, led by the agent, and `ps` what runs under it: the processes that left that group are its shells. Claude Code starts each background command in a group of its own; what it keeps for itself (`caffeinate`, a stdio MCP server) stays in the agent's. An agent of another kind counts only if it starts its commands the same way; otherwise its stops are told as ever.
+
+- **The cap.** A stop counts as working for ten minutes from the watch's first look at it with live shells (`busy` in `watch.json`, which outlives the watch's restarts), so a shell that lives for ever (a dev server the agent forgot) never hides a truly stopped agent. Past the cap, the `idle` event names them: `still running: bun scripts/dev.ts, colima start`. A new stop starts a new clock.
+- **The last shell ends.** The shell's end starts the agent's next turn within seconds. An agent still stopped after the 8 s hold of a blocked state (`WF_BLOCKED_MS`) gets its `idle` event, and one that took the turn gets none.
+- **The names.** A `sh -c` wrapper is named by what it runs, a shell between two commands by its pid, each cut to 60 characters.
+- **The cost.** Only an agent whose stop would be news is looked at: one `herdr pane process-info` each, and one `ps` per look.
+
+The clock is the watch's: with no watch running, `status` and `doctor` count live shells as working, with no cap.
 
 ## Turns
 

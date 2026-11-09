@@ -8,7 +8,7 @@ export type WatchEvent =
 	| { kind: 'blocked'; name: string; pane: string; seq: number }
 	| { kind: 'question'; name: string; at: string }
 	| { kind: 'report'; name: string; at: number }
-	| { kind: 'idle'; name: string; pane: string; seq: number }
+	| { kind: 'idle'; name: string; pane: string; seq: number; shells?: string[] }
 	| { kind: 'gone'; name: string };
 
 export type Snapshot = {
@@ -23,9 +23,13 @@ export type Snapshot = {
 	reportSeqs?: Record<string, number | undefined>;
 	/** the stops the watch recorded for each worktree (`Delivered.stops`) */
 	stops?: Record<string, Record<string, number> | undefined>;
+	/** what each stopped agent still runs in the background (`liveShells`), left out when nothing */
+	shells?: Record<string, string[] | undefined>;
+	/** when the watch first saw each agent stopped with them (`Delivered.busy`) */
+	busy?: Record<string, Delivered['busy']>;
 };
 
-const stopped = (a: Agent | undefined) => a?.agent_status === 'idle' || a?.agent_status === 'done';
+export const stopped = (a: Agent | undefined) => a?.agent_status === 'idle' || a?.agent_status === 'done';
 
 /**
  * The agent took a turn after the one that ran `seq` (`wf ask`, `wf report`): that turn
@@ -70,6 +74,43 @@ export function stopsOf(delivered: Record<string, Delivered>): Snapshot['stops']
 }
 
 /**
+ * `delivered` with the first look at each agent stopped with live shells, the start of its
+ * clock; the same object when nothing changed. The record stays while the agent holds that
+ * stop, so a stop whose last shell just ended is told apart from one that never had any.
+ */
+export function noteBusy(snap: Snapshot, delivered: Record<string, Delivered>, now: number): Record<string, Delivered> {
+	let out = delivered;
+	for (const name of Object.keys(snap.metas)) {
+		const a = snap.agents[name];
+		const old = delivered[name]?.busy;
+		const kept = old && a?.state_change_seq === old.seq ? old : undefined;
+		const busy = kept ?? (stopped(a) && snap.shells?.[name]?.length ? { seq: a!.state_change_seq, at: now } : undefined);
+		if (busy !== old) out = { ...out, [name]: { ...delivered[name], busy } };
+	}
+	return out;
+}
+
+/** Each worktree's clock of a stop with live shells, for a Snapshot. */
+export function busyOf(delivered: Record<string, Delivered>): Snapshot['busy'] {
+	return Object.fromEntries(Object.entries(delivered).map(([name, d]) => [name, d.busy]));
+}
+
+/** How long an agent stopped with live background shells counts as working. */
+export const SHELLS_CAP_MS = 10 * 60_000;
+
+/**
+ * The agent's turn ended while its own background shells run: it resumes by itself when
+ * one ends, so it counts as working. Up to SHELLS_CAP_MS past the watch's first look at
+ * that stop: a dev server it forgot must not hide a truly stopped agent for ever.
+ */
+export function onShells(snap: Snapshot, name: string, now = Date.now()): boolean {
+	const a = snap.agents[name];
+	if (!stopped(a) || !snap.shells?.[name]?.length) return false;
+	const busy = snap.busy?.[name];
+	return !(busy?.seq === a!.state_change_seq && now - busy.at >= SHELLS_CAP_MS);
+}
+
+/**
  * The question the agent waits on: it ran `wf ask` after its last prompt and its last
  * report, and took no turn since. Its next turn, report, `wf tell` or resume answers it.
  */
@@ -97,7 +138,7 @@ export function clip(text: string, max = 40): string {
  * What comes next for a worktree, for `wf status`. herdr's `done` means the agent's turn
  * ended and it waits for input, not that its task is done: the state alone misleads.
  */
-export function nextAction(snap: Snapshot, name: string, shipping = false): string {
+export function nextAction(snap: Snapshot, name: string, shipping = false, now = Date.now()): string {
 	const a = snap.agents[name];
 	if (shipping) return 'shipping';
 	if (a?.agent_status === 'blocked') return 'answer the person: on screen';
@@ -106,11 +147,13 @@ export function nextAction(snap: Snapshot, name: string, shipping = false): stri
 	const q = snap.metas[name] ? openQuestion(snap, name) : null;
 	if (q?.to === 'orchestrator') return `answer the agent: ${clip(q.question)}`;
 	if (q) return a.agent_status === 'working' ? 'with the person' : `answer the person: ${clip(q.question)}`;
+	if (onShells(snap, name, now)) return 'working (background shells)';
 	return a.agent_status === 'working' ? 'working' : 'stopped: read its screen';
 }
 
-/** herdr's state in words: `idle` and `done` both mean the agent stopped and waits for input. */
-export function stateWord(a: Agent): string {
+/** herdr's state in words: `idle` and `done` both mean the agent stopped and waits for input, unless it still runs shells of its own. */
+export function stateWord(a: Agent, shells = false): string {
+	if (shells) return 'working';
 	return stopped(a) ? 'stopped' : a.agent_status;
 }
 
@@ -121,13 +164,30 @@ export function unanswered(snap: Snapshot, name: string): boolean {
 
 const ORDER: WatchEvent['kind'][] = ['blocked', 'question', 'report', 'idle', 'gone'];
 
+/** The agent's stop would be news: new, past the last prompt, on no report and no question. */
+function idleNews(snap: Snapshot, delivered: Record<string, Delivered>, name: string): boolean {
+	const a = snap.agents[name];
+	const meta = snap.metas[name];
+	// a stop at the state the last prompt found is from before it (the one a tell answered, a
+	// new agent's before its task): the agent has not taken the prompt yet
+	const early = meta.sentSeq !== undefined && a !== undefined && a.state_change_seq <= meta.sentSeq;
+	return stopped(a) && delivered[name]?.idleSeq !== a!.state_change_seq && !reportWaits(snap, name) && !early && !openQuestion(snap, name);
+}
+
+/** The agents whose stop would be news: what they still run decides whether it is told. */
+export function idleCandidates(snap: Snapshot, delivered: Record<string, Delivered>): Snapshot['agents'] {
+	const names = Object.keys(snap.metas).filter((name) => idleNews(snap, delivered, name));
+	return Object.fromEntries(names.map((name) => [name, snap.agents[name]]));
+}
+
 /**
  * The first event not yet delivered. A blocked agent comes first (the person is waiting
  * to be called), then a question to the orchestrator, then a report, then an agent that
  * stopped without one since its last prompt, then an agent that is gone. An agent stopped
- * on its question is no idle news: the question is, or the person was called.
+ * on its question is no idle news: the question is, or the person was called. Nor is one
+ * still on its own background shells (`onShells`).
  */
-export function selectEvent(snap: Snapshot, delivered: Record<string, Delivered>): WatchEvent | null {
+export function selectEvent(snap: Snapshot, delivered: Record<string, Delivered>, now = Date.now()): WatchEvent | null {
 	const events: WatchEvent[] = [];
 	for (const name of Object.keys(snap.metas).sort()) {
 		const d = delivered[name] ?? {};
@@ -137,13 +197,7 @@ export function selectEvent(snap: Snapshot, delivered: Record<string, Delivered>
 		const q = openQuestion(snap, name);
 		if (q?.to === 'orchestrator' && d.question !== q.at) events.push({ kind: 'question', name, at: q.at });
 		if (report > (d.report ?? 0)) events.push({ kind: 'report', name, at: report });
-		const meta = snap.metas[name];
-		const reported = reportWaits(snap, name);
-		// a stop at the state the last prompt found is from before it (the one a tell answered, a
-		// new agent's before its task): the agent has not taken the prompt yet
-		const early = meta.sentSeq !== undefined && a !== undefined && a.state_change_seq <= meta.sentSeq;
-		if (a && stopped(a) && d.idleSeq !== a.state_change_seq && !reported && !early && !q)
-			events.push({ kind: 'idle', name, pane: a.pane_id, seq: a.state_change_seq });
+		if (idleNews(snap, delivered, name) && !onShells(snap, name, now)) events.push({ kind: 'idle', name, pane: a!.pane_id, seq: a!.state_change_seq, shells: snap.shells?.[name] });
 		if (!a && !d.gone) events.push({ kind: 'gone', name });
 	}
 	events.sort((x, y) => ORDER.indexOf(x.kind) - ORDER.indexOf(y.kind));

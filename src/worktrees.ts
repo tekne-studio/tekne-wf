@@ -5,9 +5,11 @@ import { realpathSync } from 'node:fs';
 import { basename } from 'node:path';
 import { agentSession } from './claude';
 import { linkedWorktrees, realpathOr } from './git';
+import * as herdr from './herdr';
 import type { Agent } from './herdr';
+import { backgroundOf, processTable } from './procs';
 import { nameFromBranch, type State } from './state';
-import { clip, openQuestion, reportWaits, stopsOf, type Snapshot } from './watch';
+import { busyOf, clip, onShells, openQuestion, reportWaits, stopped, stopsOf, type Snapshot } from './watch';
 
 /** The live agent whose folder is `root` or inside it. */
 export function agentAt(agents: Agent[], root: string): Agent | undefined {
@@ -41,6 +43,26 @@ export async function worktreeAgents(main: string, agents: Agent[]): Promise<Wor
 }
 
 /**
+ * What each stopped agent among `agents` still runs in the background, by name: herdr tells
+ * the pane's foreground group, and the process table what left it. A herdr that does not
+ * answer reads as none, so the stop is told as it would be without shells.
+ */
+export async function liveShells(agents: Snapshot['agents']): Promise<NonNullable<Snapshot['shells']>> {
+	const found: Record<string, string[]> = {};
+	const stops = Object.entries(agents).filter(([, a]) => stopped(a));
+	if (!stops.length) return found;
+	const table = processTable();
+	await Promise.all(
+		stops.map(async ([name, a]) => {
+			const leader = await herdr.paneForeground(a!.pane_id).catch(() => null);
+			const shells = leader === null ? [] : backgroundOf(table, leader);
+			if (shells.length) found[name] = shells.map((s) => clip(s, 60));
+		})
+	);
+	return found;
+}
+
+/**
  * How the orchestrator answers an agent: SendMessage to its session; `wf tell` when none
  * runs, which says why and what to do. Any turn the agent takes records the answer.
  */
@@ -67,7 +89,8 @@ export function ago(ms: number): string {
 
 /** What wf knows of each worktree it started, as watch reads it, with the stops the watch recorded. */
 export function snapshotOf(state: State, worktrees: WorktreeAgent[]): Snapshot {
-	const snap: Snapshot = { metas: {}, agents: {}, reports: {}, questions: {}, reportSeqs: {}, stops: stopsOf(state.delivered()) };
+	const delivered = state.delivered();
+	const snap: Snapshot = { metas: {}, agents: {}, reports: {}, questions: {}, reportSeqs: {}, stops: stopsOf(delivered), busy: busyOf(delivered) };
 	for (const w of worktrees) {
 		const meta = w.named ? state.meta(w.name) : null;
 		if (meta) snap.metas[w.name] = meta;
@@ -82,10 +105,11 @@ export function snapshotOf(state: State, worktrees: WorktreeAgent[]): Snapshot {
 type Waiting = { name: string; line: string };
 
 /**
- * Whether a watch runs for the repository, the reports that wait for a ship and the
- * questions that wait for the orchestrator's answer: for status and doctor.
+ * Whether a watch runs for the repository, the reports that wait for a ship, the questions
+ * that wait for the orchestrator's answer and the agents stopped past the cap with shells
+ * left running: for status and doctor.
  */
-export function watchLines(state: State, snap: Snapshot): { watch: string | null; waiting: Waiting[]; asking: Waiting[] } {
+export function watchLines(state: State, snap: Snapshot): { watch: string | null; waiting: Waiting[]; asking: Waiting[]; left: Waiting[] } {
 	const w = state.watcher();
 	const watch = w ? `\`bun wf watch\` runs (pid ${w.pid}, started ${ago(Date.parse(w.startedAt))})` : null;
 	const names = Object.keys(snap.metas);
@@ -94,7 +118,11 @@ export function watchLines(state: State, snap: Snapshot): { watch: string | null
 		const q = openQuestion(snap, name);
 		return q?.to === 'orchestrator' ? [{ name, line: `${name} asks the orchestrator (asked ${ago(Date.parse(q.at))}): ${clip(q.question, 60)}` }] : [];
 	});
-	return { watch, waiting, asking };
+	const left = names.flatMap((name) => {
+		const shells = snap.shells?.[name];
+		return shells?.length && !onShells(snap, name) ? [{ name, line: `${name} stopped with shells left running: ${shells.join(', ')}` }] : [];
+	});
+	return { watch, waiting, asking, left };
 }
 
 export const NO_WATCH = 'no `bun wf watch` runs for this repository: a report reaches the orchestrator only through the message its agent sends';

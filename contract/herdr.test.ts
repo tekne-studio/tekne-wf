@@ -102,6 +102,8 @@ it('a worktree is created, listed with its workspace, and removed', async () => 
 	await herdr.paneRun(pane, 'true', ["it's"]);
 	// closing spares the pane's shell, which herdr ends with the workspace
 	expect(await herdr.paneShell(pane)).toBeNumber();
+	// watch finds an agent's background shells from the group in its pane's foreground
+	expect(await herdr.paneForeground(pane)).toBeNumber();
 
 	await herdr.worktreeRemove(workspace);
 	expect((await herdr.worktreeList(repo)).some((w) => w.is_linked_worktree)).toBe(false);

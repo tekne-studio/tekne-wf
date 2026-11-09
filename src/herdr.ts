@@ -153,6 +153,12 @@ export async function paneShell(pane: string): Promise<number | null> {
 	return typeof pid === 'number' ? pid : null;
 }
 
+/** The leader of the process group in a pane's foreground, the agent when one runs there; null when herdr does not tell. */
+export async function paneForeground(pane: string): Promise<number | null> {
+	const pid = (await call(['pane', 'process-info', '--pane', pane]))?.process_info?.foreground_process_group_id;
+	return typeof pid === 'number' ? pid : null;
+}
+
 /**
  * Types a command line and Enter into the pane's shell. The command word stays bare, so an
  * alias the person keeps for it applies; every argument is single-quoted, so nothing in it

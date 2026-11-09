@@ -9,7 +9,7 @@ import * as herdr from '../herdr';
 import { KINDS, type Kind, type KindSpec } from '../kinds';
 import { OPENER, rulesProblems } from '../rules';
 import { State } from '../state';
-import { NO_WATCH, START_WATCH, answerBy, noAgent, noAgentFix, snapshotOf, watchLines, worktreeAgents } from '../worktrees';
+import { NO_WATCH, START_WATCH, answerBy, liveShells, noAgent, noAgentFix, snapshotOf, watchLines, worktreeAgents } from '../worktrees';
 
 export const PLUGIN_ID = 'tekne.wf';
 
@@ -136,6 +136,7 @@ export async function doctorCommand(_: string[], __: Options): Promise<number> {
 		const worktrees = await worktreeAgents(c.main, await herdr.agentList());
 		const state = new State(c.commonDir);
 		const snap = snapshotOf(state, worktrees);
+		snap.shells = await liveShells(snap.agents);
 		// the kinds in use: the config's, and each one `spawn --kind` started in a worktree
 		kinds.push(...Object.values(snap.metas).map((m) => m.kind));
 		const states = await herdr.integrations();
@@ -150,12 +151,13 @@ export async function doctorCommand(_: string[], __: Options): Promise<number> {
 		for (const w of alone) warn(noAgent(w), noAgentFix(w, state));
 		if (worktrees.length && !alone.length) ok(`an agent the person can watch in each worktree (${worktrees.length})`);
 		if (Object.keys(snap.metas).length) {
-			const { watch, waiting, asking } = watchLines(state, snap);
+			const { watch, waiting, asking, left } = watchLines(state, snap);
 			if (watch) ok(watch);
 			else warn(NO_WATCH, START_WATCH);
 			const agent = (name: string) => worktrees.find((w) => w.named && w.name === name)?.agent;
 			for (const w of waiting) warn(w.line, `check it, then \`bun wf ship ${w.name}\`, or answer by ${answerBy(w.name, agent(w.name))}`);
 			for (const q of asking) warn(q.line, `the orchestrator answers by ${answerBy(q.name, agent(q.name))}`);
+			for (const l of left) warn(l.line, `read its screen, then answer by ${answerBy(l.name, agent(l.name))}`);
 		}
 	} catch (e) {
 		bad(`herdr did not answer: ${(e as Error).message}`, '`herdr status`');

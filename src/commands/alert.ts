@@ -4,6 +4,7 @@ import { WfError } from '../context';
 import { branchOf, checkouts } from '../git';
 import * as herdr from '../herdr';
 import { State, nameFromBranch } from '../state';
+import { stopped } from '../watch';
 
 /**
  * Calls the person for an agent blocked on an approval or a question on screen, or asking
@@ -20,7 +21,8 @@ export async function callPerson(state: State, repo: string, name: string, pane:
 /**
  * How long an agent stays blocked before the person is called: auto mode answers some
  * permission dialogs by itself within seconds, and a state that goes away by itself waits
- * on nobody. `WF_BLOCKED_MS` sets it (the tests' fake herdr needs none).
+ * on nobody. The same hold follows an agent's last background shell, whose end starts its
+ * next turn. `WF_BLOCKED_MS` sets it (the tests' fake herdr needs none).
  */
 export const holdMs = () => Number(process.env.WF_BLOCKED_MS ?? 8000);
 
@@ -29,6 +31,13 @@ export async function heldBlocked(target: string, seq: number): Promise<boolean>
 	await Bun.sleep(holdMs());
 	const a = await herdr.agentGet(target).catch(() => null);
 	return a?.agent_status === 'blocked' && a.state_change_seq === seq;
+}
+
+/** The agent is still stopped at `seq` once the hold is over: the end of its last shell started no turn. */
+export async function heldStopped(target: string, seq: number): Promise<boolean> {
+	await Bun.sleep(holdMs());
+	const a = await herdr.agentGet(target).catch(() => undefined);
+	return stopped(a) && a!.state_change_seq === seq;
 }
 
 /**

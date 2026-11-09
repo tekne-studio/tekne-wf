@@ -100,6 +100,8 @@ export type Delivered = {
 	questionReminded?: string;
 	/** by the seq a question or a report recorded, the first stop the watch saw past it: the turn that asked or reported ended there */
 	stops?: Record<string, number>;
+	/** when the watch first saw the agent stopped at `seq` with live background shells: the clock of `SHELLS_CAP_MS` */
+	busy?: { seq: number; at: number };
 };
 
 export class State {

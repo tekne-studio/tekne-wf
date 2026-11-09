@@ -1,7 +1,8 @@
 // The processes running inside a worktree, found by their working folder. A dev server an
 // agent left behind outlives its parent (PPID 1) and keeps writing in the worktree, so
 // removing the folder stops at "Directory not empty" and its ports stay taken: closing
-// stops every such process first.
+// stops every such process first. And the background shells an agent still runs, found
+// from the process table.
 import { existsSync, readFileSync, readdirSync, readlinkSync } from 'node:fs';
 import { realpathOr } from './git';
 import { alive } from './lock';
@@ -81,6 +82,36 @@ export function processesIn(root: string): Proc[] {
 		else if (line[0] === 'n' && pid && inside(line.slice(1))) found.push({ pid, command });
 	}
 	return found;
+}
+
+export type Row = { pid: number; ppid: number; pgid: number; command: string };
+
+/** Every process on the machine. */
+export function processTable(): Row[] {
+	return out(['ps', '-A', '-o', 'pid=,ppid=,pgid=,command=']).split('\n').flatMap((line) => {
+		const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/);
+		return m ? [{ pid: Number(m[1]), ppid: Number(m[2]), pgid: Number(m[3]), command: m[4] }] : [];
+	});
+}
+
+const SHELL_C = /^(?:\S*\/)?-?(?:ba|z|da|k|fi)?sh\s+-\w*c\b/;
+
+/**
+ * What the agent leading the foreground group `leader` still runs in the background: the
+ * processes under it that left its group. Claude Code starts each background command in a
+ * group of its own; what it keeps for itself (`caffeinate`, a stdio MCP server) stays in
+ * the agent's and never ends. A `sh -c` wrapper is named by what it runs, a shell between
+ * two commands by its pid.
+ */
+export function backgroundOf(table: Row[], leader: number): string[] {
+	const under = (pid: number) => table.filter((p) => p.ppid === pid);
+	const named = (p: Row): string[] => {
+		if (!SHELL_C.test(p.command)) return [p.command];
+		const runs = under(p.pid);
+		return runs.length ? runs.flatMap(named) : [`a shell (pid ${p.pid})`];
+	};
+	const walk = (pid: number): string[] => under(pid).flatMap((p) => (p.pgid === leader ? walk(p.pid) : named(p)));
+	return [...new Set(walk(leader))];
 }
 
 /** This process and its parents: `wf ship` run alone, in the worktree's own pane, must not stop itself. */

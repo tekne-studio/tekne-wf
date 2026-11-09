@@ -9,8 +9,8 @@ import * as herdr from '../herdr';
 import { KINDS, type Kind, type KindSpec, choiceArgs, kindOf, startArgs } from '../kinds';
 import { agentIn, closeWorktree, workspaceFor } from '../ship';
 import { type State, branchFor, nameFromBranch, readKeys } from '../state';
-import { markDelivered, nextAction, stateWord } from '../watch';
-import { NO_WATCH, START_WATCH, ago, answerBy, noAgent, noAgentFix, snapshotOf, watchLines, worktreeAgents } from '../worktrees';
+import { markDelivered, nextAction, onShells, stateWord } from '../watch';
+import { NO_WATCH, START_WATCH, ago, answerBy, liveShells, noAgent, noAgentFix, snapshotOf, watchLines, worktreeAgents } from '../worktrees';
 import { callPerson } from './alert';
 import { herdrReady, sendFirstPrompt, took } from './spawn';
 import { worktreeOf } from './ship';
@@ -224,6 +224,7 @@ export async function statusCommand(_: string[], __: Options): Promise<void> {
 		return;
 	}
 	const snap = snapshotOf(state, worktrees);
+	snap.shells = await liveShells(snap.agents);
 	const rows = [['name', 'behind/ahead', 'agent', 'report', 'next', 'look']];
 	for (const w of worktrees) {
 		const counts = w.branch ? (await git(main, 'rev-list', '--left-right', '--count', `${I}...${w.branch}`)).split(/\s+/) : [];
@@ -232,7 +233,7 @@ export async function statusCommand(_: string[], __: Options): Promise<void> {
 		rows.push([
 			w.name,
 			counts.length === 2 ? `${counts[0]}/${counts[1]}` : '-',
-			agents === null ? '?' : w.agent ? `${w.agent.agent} ${stateWord(w.agent)}` : '! none',
+			agents === null ? '?' : w.agent ? `${w.agent.agent} ${stateWord(w.agent, onShells(snap, w.name))}` : '! none',
 			report ? ago(report) : '-',
 			agents === null ? '?' : nextAction(snap, w.name, w.named && state.shipping(w.name)),
 			urls || '-'
@@ -244,7 +245,7 @@ export async function statusCommand(_: string[], __: Options): Promise<void> {
 	const alone = agents === null ? [] : worktrees.filter((w) => !w.agent);
 	for (const w of alone) console.log(`\n! ${noAgent(w)}\n    ${noAgentFix(w, state)}`);
 	if (!Object.keys(snap.metas).length) return;
-	const { watch, waiting, asking } = watchLines(state, snap);
+	const { watch, waiting, asking, left } = watchLines(state, snap);
 	console.log(watch ? `\n${watch}` : `\n! ${NO_WATCH}\n    ${START_WATCH}`);
-	for (const w of [...asking, ...waiting]) console.log(`· ${w.line}`);
+	for (const w of [...asking, ...waiting, ...left]) console.log(`· ${w.line}`);
 }

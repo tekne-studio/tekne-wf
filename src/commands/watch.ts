@@ -6,9 +6,9 @@ import { WfError, inMain } from '../context';
 import * as herdr from '../herdr';
 import { orphaned } from '../procs';
 import { speaksFor, type Meta, type Watcher } from '../state';
-import { clearReturned, clip, dueQuestions, dueReminders, dueReports, markDelivered, noteStops, openQuestion, selectEvent, stopsOf, type Snapshot } from '../watch';
-import { agentAt, ago, answerBy } from '../worktrees';
-import { callPerson, heldBlocked } from './alert';
+import { busyOf, clearReturned, clip, dueQuestions, dueReminders, dueReports, idleCandidates, markDelivered, noteBusy, noteStops, openQuestion, selectEvent, stopsOf, type Snapshot } from '../watch';
+import { agentAt, ago, answerBy, liveShells } from '../worktrees';
+import { callPerson, heldBlocked, heldStopped } from './alert';
 import { PLUGIN_ID } from './setup';
 import { herdrReady } from './spawn';
 
@@ -135,11 +135,18 @@ export async function watchCommand(_: string[], opt: Options): Promise<number> {
 		}
 		// another agent's events stay for a watch that speaks for it
 		const own = Object.fromEntries(Object.entries(metas).filter(([, m]) => speaksFor(self, m)));
+		// only an agent whose stop would be news is looked at: the first look starts its clock
+		snap.shells = await liveShells(idleCandidates({ ...snap, metas: own }, delivered));
+		const noted = noteBusy(snap, delivered, Date.now());
+		if (noted !== delivered) state.writeDelivered((delivered = noted));
+		snap.busy = busyOf(delivered);
 		const event = selectEvent({ ...snap, metas: own }, delivered);
 		// a worktree closed or shipped since its meta was read is no news: its agent ended with it
 		if (event && !state.meta(event.name)) continue;
 		// a blocked state that goes away by itself within the hold waits on nobody
 		if (event?.kind === 'blocked' && !(await heldBlocked(event.pane, event.seq))) continue;
+		// the last shell just ended: its agent takes the next turn within seconds
+		if (event?.kind === 'idle' && !event.shells?.length && delivered[event.name]?.busy?.seq === event.seq && !(await heldStopped(event.pane, event.seq))) continue;
 		if (event) {
 			state.writeDelivered(markDelivered(delivered, event));
 			if (event.kind === 'blocked') {
@@ -159,7 +166,8 @@ export async function watchCommand(_: string[], opt: Options): Promise<number> {
 				console.log(readFileSync(state.reportPath(event.name), 'utf8').trimEnd());
 				console.log(`\nRead the diff and look at the screens, then \`bun wf ship ${event.name}\`.`);
 			} else if (event.kind === 'idle') {
-				console.log(`idle ${event.name}: the agent stopped with no report since its last prompt (pane ${event.pane}). Its screen:\n`);
+				const still = event.shells?.length ? `; still running: ${event.shells.join(', ')}` : '';
+				console.log(`idle ${event.name}: the agent stopped with no report since its last prompt (pane ${event.pane})${still}. Its screen:\n`);
 				console.log((await herdr.agentRead(event.pane, 20).catch(() => '(screen unreadable)')).trimEnd());
 				console.log(`\nAnswer by ${answerBy(event.name, agents[event.name])}.`);
 			} else {
