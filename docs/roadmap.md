@@ -60,7 +60,6 @@ At the platform on 2026-10-22, a task moved the project to wf 0.6.0 and added `d
 ### Watch
 
 - `status` names the session a running watch speaks for: it says "`bun wf watch` runs (pid …)" for a watch from a terminal too, which speaks for no agent a session spawned (noticed by deafwatch, 2026-10-25).
-- `watch` returns "stopped with no report" for an agent whose turn ended while its own background shells still run (a `bun run dev` coming up, a Colima start): the agent resumes by itself when the shell finishes, so this is a false alarm four times in one evening (dam-workspace, 2026-11-09). Treat an agent with live background shells as working, or say so in the line.
 
 ### Calling the person
 
