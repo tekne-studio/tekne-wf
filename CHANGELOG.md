@@ -4,7 +4,9 @@ Versions follow semver; the commit type is the bump (`feat` minor, `fix`
 patch, a breaking change minor while below 1.0). Entries are distilled from
 the commits.
 
-## Unreleased
+## 0.10.0
+
+A closed worktree takes down what its `prepare` brought up: `close` in `wf.config.ts` runs before `ship` or `close` removes the folder, so no container or server of a finished task is left running.
 
 ### Added
 
