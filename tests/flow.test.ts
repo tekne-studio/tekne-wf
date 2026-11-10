@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { State } from '../src/state';
 import type { FakeAgent } from './fake-herdr';
-import { fakeHerdr, git, repo, worktree, writer } from './helpers';
+import { commit, fakeHerdr, git, repo, worktree, writer } from './helpers';
 
 const CLI = join(import.meta.dir, '../src/cli.ts');
 const cleanups: (() => void)[] = [];
@@ -790,6 +790,47 @@ test('close stops every process in the worktree, orphans included, before removi
 	expect(server.alive()).toBe(false);
 	expect(existsSync(s.wtPath)).toBe(false);
 	expect(shell.killed || shell.exitCode !== null).toBe(false);
+});
+
+/** The flow's config with this `close`, committed in `dir`. */
+const withClose = (dir: string, close: string) => commit(dir, 'chore: close', { 'wf.config.ts': CONFIG.replace("integration: 'dev',", `integration: 'dev',\n\tclose: ${JSON.stringify(close)},`) });
+
+test('after a ship whose close failed, the command the refusal names closes the worktree and its branch', () => {
+	const s = setup();
+	s.wf(s.main, ['spawn', 'dash', '--task', s.task]);
+	const fixed = join(s.home, 'fixed');
+	withClose(s.wtPath, `test -f ${fixed}`);
+	const state = s.h.state();
+	state.agents![0].agent_status = 'idle';
+	s.h.set(state);
+	const shipped = s.wf(s.main, ['ship', 'dash']);
+	expect(shipped.code).toBe(1);
+	expect(shipped.err).toContain('then `bun wf close dash --delete-branch`');
+	expect(git(s.main, 'log', '-1', '--format=%s', 'dev')).toBe('chore: close');
+	expect(existsSync(s.wtPath)).toBe(true);
+	writeFileSync(fixed, '');
+	const closed = s.wf(s.main, ['close', 'dash', '--delete-branch']);
+	expect(closed.err).not.toContain('✗');
+	expect(closed.out).toContain('✓ dash closed');
+	expect(existsSync(s.wtPath)).toBe(false);
+	expect(git(s.main, 'branch', '--list', 'worktree/dash')).toBe('');
+});
+
+test('close runs the branch\'s own close; a branch whose config does not load gets the main checkout\'s', () => {
+	const s = setup();
+	const ran = (who: string) => join(s.home, `ran-${who}`);
+	withClose(s.main, `touch ${ran('main')}`);
+	const own = worktree(s.main, 'dash');
+	withClose(own, `touch ${ran('branch')}`);
+	expect(s.wf(s.main, ['close', 'dash']).out).toContain('✓ dash closed');
+	expect(existsSync(ran('branch'))).toBe(true);
+	expect(existsSync(ran('main'))).toBe(false);
+
+	const broken = worktree(s.main, 'chart');
+	commit(broken, 'chore: a field this wf does not know', { 'wf.config.ts': `export default { integration: 'dev', nope: 1 };\n` });
+	expect(s.wf(s.main, ['close', 'chart']).out).toContain('✓ chart closed');
+	expect(existsSync(ran('main'))).toBe(true);
+	expect(existsSync(broken)).toBe(false);
 });
 
 test('ship --reported delivers every report waiting, one after another, the oldest first; a report its agent took a turn after was answered', () => {

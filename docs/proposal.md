@@ -41,7 +41,7 @@ Each task gets its own worktree, branch and agent: never two agents in one worki
 | `wf resume <name>` | main checkout | starts the agent again in its pane, continuing its last conversation (`claude --continue` picks the latest session of the folder it starts in) |
 | `wf prepare` | a worktree | runs the project's `prepare` under the repository lock (the herdr plugin, `spawn` and `ship` call it) |
 | `wf ship [<name>]` | main checkout with a name, or the worktree itself | refuses on a dirty or wrong state, merges the integration branch, prepares, runs the gates in order (the cheap alone when every changed file matches `docsOnly`), takes the lock, fast-forwards the main checkout to the tested commit, deletes the branch, closes the worktree by path; never pushes; `--dry-run` |
-| `wf close <name>` | main checkout | abandons a worktree: closes it by path; keeps the branch unless `--delete-branch` |
+| `wf close <name>` | main checkout | abandons a worktree: runs the project's `close` and closes it by path; keeps the branch unless `--delete-branch` |
 | `wf gen` · `wf check` | anywhere · CI | writes · verifies the rules block |
 | `wf --skill [--all]` | anywhere | prints the rules of the role the checkout plays: the agent's in a worktree, the orchestrator's in the main checkout, both with `--all` |
 
@@ -75,6 +75,7 @@ export default defineConfig({
 ```
 
 - `prepare` is idempotent: it runs at creation and after every merge of the integration branch.
+- `close` is idempotent too: it runs in the worktree before `wf ship` or `wf close` removes it, and takes down what `prepare` brought up outside the folder.
 - `gates` run in order, cheap then expensive; the first failure stops the run. An agent runs the cheap ones in its worktree; `wf ship` runs all of them, so the orchestrator never reruns them ([why](decisions/2026-10-22-ship-runs-the-gates.md)).
 - `docsOnly` lists the globs of the paths that count as docs (`['docs/**', '**/*.md']`): when every file the delivery changes matches, `wf ship` runs the cheap gates alone and says why ([why](decisions/2026-10-22-ship-in-proportion-tests-the-tip.md)). Empty or missing, every gate runs.
 - `look` is where the URLs the person opens come from, read after `prepare`. Without it, the agent reports the URL.

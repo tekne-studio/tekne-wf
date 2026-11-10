@@ -9,6 +9,8 @@ export type Config = {
 	integration: string;
 	/** idempotent shell command, run in the worktree at creation and after each merge of the integration branch */
 	prepare?: string;
+	/** idempotent shell command, run in the worktree before it is removed, once wf has stopped what still ran there */
+	close?: string;
 	/** shell commands run in the worktree, in order; the first failure stops the run */
 	gates?: { cheap?: string[]; expensive?: string[] };
 	/** globs of the paths that count as docs only: a diff where every file matches runs only the cheap gates */
@@ -25,6 +27,7 @@ export type Config = {
 
 export type Resolved = Required<Pick<Config, 'integration'>> & {
 	prepare: string;
+	close: string;
 	gates: { cheap: string[]; expensive: string[] };
 	docsOnly: string[];
 	look: { file: string; keys: string[] } | null;
@@ -49,11 +52,12 @@ export function resolve(raw: unknown): Resolved {
 	const problems: string[] = [];
 	const c = (raw ?? {}) as Record<string, any>;
 	if (typeof raw !== 'object' || raw === null) throw new ConfigError(`${CONFIG_FILE} must export a config object (export default defineConfig({ … }))`);
-	const known = ['integration', 'prepare', 'gates', 'docsOnly', 'look', 'agent', 'header', 'agentsFile'];
+	const known = ['integration', 'prepare', 'close', 'gates', 'docsOnly', 'look', 'agent', 'header', 'agentsFile'];
 	for (const k of Object.keys(c)) if (!known.includes(k)) problems.push(`${k}: unknown field (known: ${known.join(', ')})`);
 
 	if (typeof c.integration !== 'string' || !c.integration.trim()) problems.push('integration: the integration branch, a non-empty string (e.g. "dev")');
 	if (c.prepare !== undefined && typeof c.prepare !== 'string') problems.push('prepare: a shell command string');
+	if (c.close !== undefined && typeof c.close !== 'string') problems.push('close: a shell command string');
 	if (c.gates !== undefined) {
 		if (typeof c.gates !== 'object' || c.gates === null || Array.isArray(c.gates)) problems.push('gates: { cheap?: string[], expensive?: string[] }');
 		else {
@@ -76,6 +80,7 @@ export function resolve(raw: unknown): Resolved {
 	return {
 		integration: c.integration,
 		prepare: c.prepare?.trim() ?? '',
+		close: c.close?.trim() ?? '',
 		gates: { cheap: c.gates?.cheap ?? [], expensive: c.gates?.expensive ?? [] },
 		docsOnly: c.docsOnly ?? [],
 		look: c.look ? { file: c.look.file, keys: c.look.keys } : null,

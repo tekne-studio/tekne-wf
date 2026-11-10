@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { resolve, type Config } from '../src/config';
 import { WfError } from '../src/context';
 import { checkouts } from '../src/git';
-import { docsOnly, ship } from '../src/ship';
+import { closeWorktree, docsOnly, ship } from '../src/ship';
 import { State } from '../src/state';
 import { slot } from '../src/lock';
 import { commit, fakeHerdr, git, repo, worktree, write, writer } from './helpers';
@@ -56,6 +56,52 @@ test('a process left running in the worktree is stopped before the worktree goes
 	await s.run({ integration: 'dev' });
 	expect(server.alive()).toBe(false);
 	expect(existsSync(s.wt)).toBe(false);
+});
+
+test('close runs in the worktree once what ran there has stopped, and then the worktree goes', async () => {
+	const s = await setup();
+	commit(s.wt, 'chore: ignore pb_data', { '.gitignore': 'pb_data/\n' });
+	const server = writer(s.wt);
+	cleanups.push(server.stop);
+	const seen = join(s.dir, 'close.txt');
+	await closeWorktree(s.wt, s.main, false, `{ pwd; kill -0 ${server.pid} 2>/dev/null && echo running || echo stopped; } > ${seen}`, 'bun wf close dash');
+	expect(readFileSync(seen, 'utf8')).toBe(`${s.wt}\nstopped\n`);
+	expect(existsSync(s.wt)).toBe(false);
+});
+
+test('a close that fails keeps the worktree and names what to run', async () => {
+	const s = await setup();
+	const message = await refused(closeWorktree(s.wt, s.main, false, 'exit 3', 'bun wf close dash'));
+	expect(message).toContain(`run \`exit 3\` in ${s.wt}, then \`bun wf close dash\``);
+	expect(existsSync(s.wt)).toBe(true);
+});
+
+test('with force, a close that fails is printed and the worktree goes anyway', async () => {
+	const s = await setup();
+	const log = spyOn(console, 'log');
+	cleanups.push(() => log.mockRestore());
+	await closeWorktree(s.wt, s.main, true, 'exit 3', 'bun wf close dash');
+	expect(log.mock.calls.flat().join('\n')).toContain('✗ exit 3 failed; --force removes the worktree anyway');
+	expect(existsSync(s.wt)).toBe(false);
+});
+
+test('ship runs close on the worktree\'s branch, after the fast-forward', async () => {
+	const s = await setup();
+	const seen = join(s.dir, 'close.txt');
+	await s.run({ integration: 'dev', close: `{ git branch --show-current; git log -1 --format=%s dev; } > ${seen}` });
+	expect(readFileSync(seen, 'utf8')).toBe('worktree/dash\nfeat: dash\n');
+	expect(git(s.main, 'branch', '--list', 'worktree/dash')).toBe('');
+	expect(existsSync(s.wt)).toBe(false);
+});
+
+test('a close that fails after the delivery says it is delivered, and leaves the worktree on its branch', async () => {
+	const s = await setup();
+	const message = await refused(s.run({ integration: 'dev', close: 'exit 3' }));
+	expect(git(s.main, 'log', '--format=%s', 'dev')).toContain('feat: dash');
+	expect(message).toContain(`dev is already at ${s.head('dev').slice(0, 9)}, but exit 3 failed`);
+	expect(message).toContain(`run \`exit 3\` in ${s.wt}, then \`bun wf close dash --delete-branch\``);
+	expect(existsSync(s.wt)).toBe(true);
+	expect(git(s.wt, 'branch', '--show-current')).toBe('worktree/dash');
 });
 
 test('closes through herdr when a workspace is open on the worktree, found by path', async () => {
@@ -302,7 +348,7 @@ test('interrupting ship ends the gate\'s whole process group', async () => {
 test('--dry-run runs it all but the fast-forward and the close', async () => {
 	const s = await setup();
 	const before = s.head('dev');
-	await s.run({ integration: 'dev', gates: { cheap: ['true'] } }, { dryRun: true });
+	await s.run({ integration: 'dev', close: 'exit 3', gates: { cheap: ['true'] } }, { dryRun: true });
 	expect(s.head('dev')).toBe(before);
 	expect(existsSync(s.wt)).toBe(true);
 	expect(git(s.main, 'branch', '--list', 'worktree/dash')).toContain('worktree/dash');

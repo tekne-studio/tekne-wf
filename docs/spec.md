@@ -46,6 +46,7 @@ Exit codes: `0` done, `1` refused or failed (the message says what to do), `2` u
 type Config = {
 	integration: string; // the branch the main checkout stays on
 	prepare?: string; // idempotent shell command, run in the worktree
+	close?: string; // idempotent shell command, run in the worktree before it is removed
 	gates?: { cheap?: string[]; expensive?: string[] }; // shell commands, in order
 	docsOnly?: string[]; // globs: a delivery whose every file matches runs only the cheap gates
 	look?: { file: string; keys: string[] }; // where the URLs for the person are, after prepare
@@ -149,7 +150,7 @@ A worktree with no agent shows `! none`, and a note under the table says what to
 
 **`wf ship [<name>…] [--reported] [--dry-run]`**, in the worktree, or in the main checkout with names: it and the gates, the agent's and its own, in [ship.md](ship.md).
 
-**`wf close <name> [--force] [--delete-branch]`**, main checkout. Refuses uncommitted changes or a `working` agent without `--force`. Forgets the worktree, then stops its processes and closes it by path, as `ship` does; keeps the branch unless `--delete-branch`.
+**`wf close <name> [--force] [--delete-branch]`**, main checkout. Refuses uncommitted changes or a `working` agent without `--force`. Forgets the worktree, then stops its processes, runs its `close` and closes it by path, as `ship` does ([ship.md](ship.md#delivering)); the `close` is the branch's own, or the main checkout's when the branch's config does not load. A `close` that fails keeps the worktree; `--force` prints the failure and removes it anyway. Keeps the branch unless `--delete-branch`.
 
 **`wf --skill [--all]`**, anywhere. Prints, as Markdown on stdout, the rules of the role the checkout plays: `templates/agent.md` in a worktree (ending with the line for an agent alone, with no orchestrator), `templates/orchestrator.md` in the main checkout, both with `--all`; rendered from the project's config (gates, `look`, `docsOnly`, the integration branch) and naming kb's commands when the main checkout's `agentsFile` carries kb's block. The block in `AGENTS.md` says to run it before anything with wf, so a session reads only its own role at every turn, and the task header carries the agent's rules once ([why](decisions/2026-10-26-the-block-in-agents-md-says-only-what-every-agent-needs-wf.md)). A flag, as `herdr --skill`: it prints the tool's own instructions and is no verb of the flow.
 

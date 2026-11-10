@@ -31,6 +31,7 @@ test('init writes the config, AGENTS.md from CLAUDE.md, the link, the script and
 	const res = wf(r.main, ['init'], { CLAUDE_CONFIG_DIR: home({ [r.main]: true }), HERDR_ENV: '1' });
 	expect(res.out).toContain(`✓ wf.config.ts (integration: dev)`);
 	expect(readFileSync(join(r.main, 'wf.config.ts'), 'utf8')).toContain("prepare: 'bun install'");
+	expect(readFileSync(join(r.main, 'wf.config.ts'), 'utf8')).not.toContain('close:');
 	const agents = readFileSync(join(r.main, 'AGENTS.md'), 'utf8');
 	expect(agents).toStartWith('# Mine\n\nmy rules\n');
 	expect(agents).toContain('### Parallel agents: wf');

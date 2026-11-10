@@ -4,6 +4,12 @@ Versions follow semver; the commit type is the bump (`feat` minor, `fix`
 patch, a breaking change minor while below 1.0). Entries are distilled from
 the commits.
 
+## Unreleased
+
+### Added
+
+- `close` in `wf.config.ts`, the mirror of `prepare`: a shell command run in the worktree before `bun wf ship` or `bun wf close` removes it, once wf has stopped what still ran there. One that fails keeps the worktree and prints what to run; `bun wf close <name> --force` prints the failure and removes it anyway.
+
 ## 0.9.1
 
 A patch for the watch: an agent whose turn ended while its own background shells still run is working, not stopped, so the orchestrator is no longer woken for nothing.

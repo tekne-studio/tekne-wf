@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { agentSession, currentSession, liveSession } from '../claude';
 import type { Options } from '../cli';
+import { loadConfig } from '../config';
 import { WfError, anywhere, inMain, inWorktree } from '../context';
 import { branchOf, git } from '../git';
 import * as herdr from '../herdr';
@@ -194,7 +195,7 @@ export async function resumeCommand(args: string[], _: Options): Promise<void> {
 export async function closeCommand(args: string[], opt: Options): Promise<void> {
 	const [name] = args;
 	if (!name) throw new WfError('`bun wf close <name> [--force] [--delete-branch]`');
-	const { main, state } = await inMain('close');
+	const { main, config, state } = await inMain('close');
 	const root = await worktreeOf(main, name);
 	const force = !!opt.force;
 	const dirty = await git(root, 'status', '--porcelain');
@@ -204,7 +205,10 @@ export async function closeCommand(args: string[], opt: Options): Promise<void> 
 	// forgotten first, as ship does: the agent ends before the folder goes, and meanwhile a
 	// watch would read the worktree as gone
 	state.forget(name);
-	await closeWorktree(root, main, force);
+	// the branch's own `close` undoes what its `prepare` did; a broken config must not keep
+	// an abandoned worktree open, so the main checkout's stands in for it
+	const { close } = await loadConfig(root).catch(() => config);
+	await closeWorktree(root, main, force, close, `bun wf close ${name}${opt['delete-branch'] ? ' --delete-branch' : ''}`);
 	const branch = branchFor(name);
 	if (opt['delete-branch']) {
 		await git(main, 'branch', '-D', branch);

@@ -55,6 +55,7 @@ import type { Config } from '@tekne/wf/config';
 export default {
 	integration: 'dev',
 	prepare: 'bun run worktree',
+	close: 'bun run worktree --down',
 	gates: {
 		cheap: ['bun run check', 'bun kb check', 'bun run test:unit'],
 		expensive: ['bun run test:e2e', 'bun run test:browser']
@@ -69,6 +70,7 @@ export default {
 |---|---|
 | `integration` | the branch the main checkout stays on; `ship` fast-forwards it |
 | `prepare` | idempotent shell command run in each new worktree and after each merge of the integration branch |
+| `close` | idempotent shell command run in the worktree before it is removed, by `ship` and `close`, once wf has stopped what still ran there; takes down what `prepare` brought up outside the folder, such as a Docker Compose project |
 | `gates.cheap`, `gates.expensive` | shell commands, in order; an agent runs the cheap ones in its worktree; `ship` runs all, the cheap first, and stops at the first that fails |
 | `docsOnly` | globs of the paths that count as docs; a delivery whose every file matches runs only the cheap gates |
 | `look` | the `KEY=value` file and keys with the URLs the person opens |
@@ -86,7 +88,7 @@ Kimi asks "Trust this folder?" for every folder it never saw, a worktree of a tr
 
 ## One machine, many repositories
 
-`bun wf ship a b c` (or `--reported`, every report waiting, the oldest first) delivers one after another, each bringing in what the one before delivered; a refusal stays behind and the rest go on. The full suites belong to the ship: the rules tell each agent to run the cheap gates in its worktree and, of the expensive ones, only the test files it touched, so four worktrees never queue Chromiums on one Mac. A test that fails with no cause in the change goes to quarantine, never three reruns, and only with proof: it fails on the integration branch without the change too, or only under load (its agent skips it and names it in the report, with the proof). Expensive gates take one of the machine's places, shared by every repository's worktrees: `WF_GATE_SLOTS`, or a quarter of the cores by default. Cheap gates run freely. Each gate runs in a process group of its own, which an interrupted `ship` ends whole. Closing a worktree, by `ship` or `close`, first stops every process still running in it, a dev server left behind included.
+`bun wf ship a b c` (or `--reported`, every report waiting, the oldest first) delivers one after another, each bringing in what the one before delivered; a refusal stays behind and the rest go on. The full suites belong to the ship: the rules tell each agent to run the cheap gates in its worktree and, of the expensive ones, only the test files it touched, so four worktrees never queue Chromiums on one Mac. A test that fails with no cause in the change goes to quarantine, never three reruns, and only with proof: it fails on the integration branch without the change too, or only under load (its agent skips it and names it in the report, with the proof). Expensive gates take one of the machine's places, shared by every repository's worktrees: `WF_GATE_SLOTS`, or a quarter of the cores by default. Cheap gates run freely. Each gate runs in a process group of its own, which an interrupted `ship` ends whole. Closing a worktree, by `ship` or `close`, first stops every process still running in it, a dev server left behind included, then runs the config's `close`. A `close` that fails keeps the worktree and prints what to run; `bun wf close <name> --force` prints the failure and removes it anyway.
 
 ## One herdr plugin per machine
 

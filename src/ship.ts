@@ -15,9 +15,10 @@
 // 4. Under the repository's ship lock, checks whether the integration branch moved during
 //    the gates: moved, back to 2; otherwise, fast-forward of the main checkout to the
 //    tested commit.
-// 5. Deletes the branch and closes the worktree: stops every process still running in it,
-//    then removes it through herdr when it has an open workspace there, found by path;
-//    otherwise `git worktree remove`.
+// 5. Closes the worktree: stops every process still running in it, runs the project's
+//    `close` (one that fails stops here, with the delivery done), deletes the branch, then
+//    removes the worktree through herdr when it has an open workspace there, found by
+//    path; otherwise `git worktree remove`.
 import { existsSync, realpathSync } from 'node:fs';
 import { basename } from 'node:path';
 import type { Resolved } from './config';
@@ -156,14 +157,38 @@ async function paneShells(workspace: string): Promise<number[]> {
 }
 
 /**
- * Closes the worktree by path: stops the processes still running in it (a dev server left
- * behind would keep writing there, and the removal would fail), then removes it through
- * herdr when a workspace is open there, with git otherwise.
+ * Readies the worktree for removal: stops the processes still running in it (a dev server
+ * left behind would keep writing there, and the removal would fail), then runs the
+ * project's `close`. `closed` is false when that command failed.
  */
-export async function closeWorktree(root: string, main: string, force: boolean): Promise<void> {
+async function beforeRemoval(root: string, close: string): Promise<{ ws: string | null; closed: boolean }> {
 	const ws = await workspaceFor(root);
 	const stopped = await stopProcesses(root, ws ? await paneShells(ws) : []);
 	if (stopped.length) console.log(`↳ stopped what still ran in the worktree: ${stopped.map((p) => `${p.command} (${p.pid})`).join(', ')}`);
+	if (!close) return { ws, closed: true };
+	console.log(`\n▶ ${close}`);
+	return { ws, closed: (await sh(close, root)).ok };
+}
+
+const closeFailed = (close: string, root: string, retry: string) =>
+	`${close} failed, so the worktree stays: run \`${close}\` in ${root}, then \`${retry}\` (--force removes it even if that fails again)`;
+
+/**
+ * Closes the worktree by path. A `close` that fails keeps it, since running that command
+ * again needs the folder; `force` says so and removes it anyway. `retry` is the command
+ * the refusal names.
+ */
+export async function closeWorktree(root: string, main: string, force: boolean, close: string, retry: string): Promise<void> {
+	const { ws, closed } = await beforeRemoval(root, close);
+	if (!closed) {
+		if (!force) throw new WfError(closeFailed(close, root, retry));
+		console.log(`✗ ${close} failed; --force removes the worktree anyway`);
+	}
+	await removeWorktree(root, main, force, ws);
+}
+
+/** Removes the worktree through herdr when a workspace is open there, with git otherwise. */
+async function removeWorktree(root: string, main: string, force: boolean, ws: string | null): Promise<void> {
 	console.log(`↳ closing the worktree ${root} ${ws ? `through herdr (workspace ${ws})` : 'with git worktree remove'}`);
 	if (ws) {
 		await herdr.worktreeRemove(ws, force);
@@ -302,8 +327,8 @@ export async function ship(o: ShipInput): Promise<void> {
 			if (o.dryRun) {
 				release();
 				const ws = await workspaceFor(o.root);
-				console.log(`\n--dry-run: ${I} would go from ${short(base)} to ${short(tested)} in the main checkout; then the branch`);
-				console.log(`${branch} would go and the worktree would close ${ws ? `through herdr (workspace ${ws})` : 'with git worktree remove'}. (${fmt(performance.now() - started)})`);
+				console.log(`\n--dry-run: ${I} would go from ${short(base)} to ${short(tested)} in the main checkout; then`);
+				console.log(`${o.config.close ? `${o.config.close} would run, ` : ''}the branch ${branch} would go and the worktree would close ${ws ? `through herdr (workspace ${ws})` : 'with git worktree remove'}. (${fmt(performance.now() - started)})`);
 				return;
 			}
 			const ff = await gitLoud(o.main, 'merge', '--ff-only', tested);
@@ -314,9 +339,15 @@ export async function ship(o: ShipInput): Promise<void> {
 		}
 
 		// --- 5. Close the worktree ------------------------------------------------
-		// Closing the workspace ends the processes in its panes, this one too when ship runs
+		// Forgotten first: the agent ends before the folder goes, and meanwhile a watch would
+		// read the worktree as gone. `close` runs while the worktree is on its branch: one
+		// that fails leaves it where `wf close <name>`, which finds it by branch, reaches it.
+		if (o.name) o.state.forget(o.name);
+		const { ws, closed } = await beforeRemoval(o.root, o.config.close);
+		if (!closed) fail(`${I} is already at ${short(tested)}, but ${closeFailed(o.config.close, o.root, o.name ? `bun wf close ${o.name} --delete-branch` : `git worktree remove ${o.root}`)}`);
+		// Removing the workspace ends the processes in its panes, this one too when ship runs
 		// in the worktree's own pane: the branch goes first, with the worktree on a detached
-		// HEAD at the same commit, and the close is the very last step.
+		// HEAD at the same commit, and the removal is the very last step.
 		if (!(await gitLoud(o.root, 'switch', '--quiet', '--detach')))
 			fail(`${I} is already at ${short(tested)}, but the worktree's HEAD did not detach; delete the branch and close the worktree by hand`);
 		if (!(await gitLoud(o.main, 'branch', '-d', branch))) {
@@ -324,9 +355,8 @@ export async function ship(o: ShipInput): Promise<void> {
 			fail(`${I} is already at ${short(tested)}, but the branch ${branch} did not go`);
 		}
 		console.log(`✓ branch ${branch} deleted`);
-		if (o.name) o.state.forget(o.name);
 		console.log(`(${fmt(performance.now() - started)})`);
-		await closeWorktree(o.root, o.main, false);
+		await removeWorktree(o.root, o.main, false, ws);
 		console.log('✓ worktree closed');
 	} finally {
 		unmark();

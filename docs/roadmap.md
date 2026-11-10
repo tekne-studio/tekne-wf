@@ -11,12 +11,6 @@ What `wf` changes next, in order: each item says when it is done and leaves the 
 
 ## Now
 
-### A project's `close` runs before its worktree goes
-
-A `prepare` can bring up what lives outside the worktree's folder, such as a Docker Compose project per worktree; `ship` and `close` remove the folder and leave that running. `close` in `wf.config.ts` is the mirror of `prepare`: a shell command run in the worktree before it is removed.
-
-**Done when:** `wf ship` and `wf close` run the config's `close` before removing a worktree, one that fails keeps the worktree unless `--force`, and tests cover each case.
-
 ### `wf init` gives a project its worktree `prepare`
 
 Installing wf at the platform cost most of its time in the project's `prepare`: each worktree's own data and ports, which the site wrote again (its own worktree script: a port slot per worktree, `.env.local`, links to the main checkout's `.env` and binaries, a copy of the database). `wf init` writes `wf.config.ts` and a `prepare` with the generic parts, leaving the data copy as the one function a project writes. The design is `prepare-proposal.md`, its six choices Marlus's (2026-10-25).

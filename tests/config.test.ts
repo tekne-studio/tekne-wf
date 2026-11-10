@@ -7,6 +7,7 @@ test('fills the defaults', () => {
 	expect(c).toEqual({
 		integration: 'dev',
 		prepare: '',
+		close: '',
 		gates: { cheap: [], expensive: [] },
 		docsOnly: [],
 		look: null,
@@ -19,13 +20,17 @@ test('fills the defaults', () => {
 test('names every field that is wrong', () => {
 	const e = (() => {
 		try {
-			resolve({ integration: '', gates: ['x'], docsOnly: 'docs/**', look: { file: '.env.local' }, agent: { kind: 'codex' }, extra: 1 });
+			resolve({ integration: '', close: 1, gates: ['x'], docsOnly: 'docs/**', look: { file: '.env.local' }, agent: { kind: 'codex' }, extra: 1 });
 		} catch (e) {
 			return e as Error;
 		}
 	})();
 	expect(e).toBeInstanceOf(ConfigError);
-	for (const field of ['extra: unknown field', 'integration:', 'gates:', 'docsOnly:', 'look:', 'agent.kind:']) expect(e?.message).toContain(field);
+	for (const field of ['extra: unknown field', 'integration:', 'close:', 'gates:', 'docsOnly:', 'look:', 'agent.kind:']) expect(e?.message).toContain(field);
+});
+
+test('takes a close command', () => {
+	expect(resolve({ integration: 'dev', close: ' bun run worktree --down ' }).close).toBe('bun run worktree --down');
 });
 
 let done = () => {};
