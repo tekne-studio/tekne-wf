@@ -32,6 +32,8 @@ test('init writes the config, AGENTS.md from CLAUDE.md, the link, the script and
 	expect(res.out).toContain(`✓ wf.config.ts (integration: dev)`);
 	expect(readFileSync(join(r.main, 'wf.config.ts'), 'utf8')).toContain("prepare: 'bun install'");
 	expect(readFileSync(join(r.main, 'wf.config.ts'), 'utf8')).not.toContain('close:');
+	// beside the install of a worktree, the one of the main checkout after a ship
+	expect(readFileSync(join(r.main, 'wf.config.ts'), 'utf8')).toContain("refresh: { when: ['bun.lock', '**/package.json'], run: 'bun install --frozen-lockfile' },");
 	const agents = readFileSync(join(r.main, 'AGENTS.md'), 'utf8');
 	expect(agents).toStartWith('# Mine\n\nmy rules\n');
 	expect(agents).toContain('### Parallel agents: wf');

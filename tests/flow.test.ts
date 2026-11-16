@@ -833,6 +833,36 @@ test('close runs the branch\'s own close; a branch whose config does not load ge
 	expect(existsSync(broken)).toBe(false);
 });
 
+test('a queue runs the refresh once, after its last ship, from the config it delivered; one that fails is a line of the summary', () => {
+	const s = setup();
+	// outside the repository: the refresh leaves the main checkout as git has it
+	const ran = join(s.home, 'refreshed');
+	const config = (run: string) => CONFIG.replace("integration: 'dev',", `integration: 'dev',\n\trefresh: { when: ['bun.lock', '**/package.json'], run: ${JSON.stringify(run)} },`);
+	commit(s.main, 'chore: refresh', { 'wf.config.ts': config(`git log -1 --format=%s >> ${ran}`) });
+	commit(worktree(s.main, 'alpha'), 'feat: alpha', { 'bun.lock': 'alpha\n' });
+	commit(worktree(s.main, 'beta'), 'feat: beta', { 'package.json': '{}\n' });
+	const r = s.wf(s.main, ['ship', 'alpha', 'beta']);
+	expect(r.err).not.toContain('✗');
+	expect(r.code).toBe(0);
+	expect(r.out).toContain('queue:\n  ✓ alpha\n  ✓ beta\n');
+	// once, in a main checkout that has both deliveries
+	expect(readFileSync(ran, 'utf8')).toBe("Merge branch 'dev' into worktree/beta\n");
+	expect(r.out).toContain(`(in the main checkout, ${s.main}: the delivery changed \`bun.lock\`, \`package.json\`)`);
+	expect(git(s.main, 'status', '--porcelain')).toBe('');
+
+	// gamma delivers a refresh that fails: the queue runs that one, the config now in the main checkout
+	commit(worktree(s.main, 'gamma'), 'feat: gamma', { 'bun.lock': 'gamma\n', 'wf.config.ts': config('exit 3') });
+	commit(worktree(s.main, 'delta'), 'feat: delta', { 'package.json': '{ }\n' });
+	const failed = s.wf(s.main, ['ship', 'gamma', 'delta']);
+	expect(failed.code).toBe(1);
+	const message = `dev is at ${git(s.main, 'rev-parse', '--short=9', 'dev')} and the delivery is done, but \`exit 3\` failed in the main checkout: run \`cd ${s.main} && exit 3\``;
+	expect(failed.err).toContain(`✗ ${message}`);
+	expect(failed.out).toContain(`queue:\n  ✓ gamma\n  ✓ delta\n  ✗ refresh: ${message}\n`);
+	expect(git(s.main, 'log', '-1', '--format=%s', 'dev')).toBe("Merge branch 'dev' into worktree/delta");
+	expect(git(s.main, 'worktree', 'list')).not.toContain('worktree-');
+	expect(readFileSync(ran, 'utf8')).toBe("Merge branch 'dev' into worktree/beta\n");
+}, 30_000);
+
 test('ship --reported delivers every report waiting, one after another, the oldest first; a report its agent took a turn after was answered', () => {
 	const s = setup();
 	const task = (name: string) => {

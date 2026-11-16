@@ -4,6 +4,12 @@ Versions follow semver; the commit type is the bump (`feat` minor, `fix`
 patch, a breaking change minor while below 1.0). Entries are distilled from
 the commits.
 
+## Unreleased
+
+### Added
+
+- `refresh` in `wf.config.ts`: the globs of the files to watch (`when`) and a shell command (`run`). `bun wf ship` runs it in the main checkout right after the fast-forward, under the ship lock, when the delivery changed a matching file, so a ship that brings a new lockfile leaves the main checkout installed; a queue runs it once, after its last ship. One that fails, or leaves changes in the main checkout, leaves the delivery done and the worktree closed, prints the command to run and exits 1. `--dry-run` says whether it would run, `bun wf --skill` names it in the orchestrator's ship line, and `bun wf init` writes one for a project with a `package.json`: `{ when: ['bun.lock', '**/package.json'], run: 'bun install --frozen-lockfile' }`.
+
 ## 0.10.0
 
 A closed worktree takes down what its `prepare` brought up: `close` in `wf.config.ts` runs before `ship` or `close` removes the folder, so no container or server of a finished task is left running.

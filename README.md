@@ -56,6 +56,7 @@ export default {
 	integration: 'dev',
 	prepare: 'bun run worktree',
 	close: 'bun run worktree --down',
+	refresh: { when: ['bun.lock', '**/package.json'], run: 'bun install --frozen-lockfile' },
 	gates: {
 		cheap: ['bun run check', 'bun kb check', 'bun run test:unit'],
 		expensive: ['bun run test:e2e', 'bun run test:browser']
@@ -71,6 +72,7 @@ export default {
 | `integration` | the branch the main checkout stays on; `ship` fast-forwards it |
 | `prepare` | idempotent shell command run in each new worktree and after each merge of the integration branch |
 | `close` | idempotent shell command run in the worktree before it is removed, by `ship` and `close`, once wf has stopped what still ran there; takes down what `prepare` brought up outside the folder, such as a Docker Compose project |
+| `refresh` | `when`, globs, and `run`, an idempotent shell command: `ship` runs it in the main checkout right after the fast-forward when the delivery changed a file a glob matches, so a new lockfile leaves the main checkout installed; a queue runs it once, after its last ship. One that fails leaves the delivery done and prints the command to run |
 | `gates.cheap`, `gates.expensive` | shell commands, in order; an agent runs the cheap ones in its worktree; `ship` runs all, the cheap first, and stops at the first that fails |
 | `docsOnly` | globs of the paths that count as docs; a delivery whose every file matches runs only the cheap gates |
 | `look` | the `KEY=value` file and keys with the URLs the person opens |

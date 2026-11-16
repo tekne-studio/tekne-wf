@@ -19,7 +19,7 @@ function starter(integration: string, bun: boolean): string {
 
 export default {
 	integration: '${integration}',
-${bun ? `	// runs in each new worktree and after each merge of ${integration}; must be idempotent\n	prepare: 'bun install',\n` : ''}	// an agent runs the cheap ones in its worktree; wf ship runs them all, cheap first, and stops at the first that fails
+${bun ? `	// runs in each new worktree and after each merge of ${integration}; must be idempotent\n	prepare: 'bun install',\n	// runs in the main checkout after a ship whose delivery changed one of these files; must be idempotent\n	refresh: { when: ['bun.lock', '**/package.json'], run: 'bun install --frozen-lockfile' },\n` : ''}	// an agent runs the cheap ones in its worktree; wf ship runs them all, cheap first, and stops at the first that fails
 	gates: { cheap: [], expensive: [] }
 } satisfies Config;
 `;

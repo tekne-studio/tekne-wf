@@ -8,6 +8,7 @@ test('fills the defaults', () => {
 		integration: 'dev',
 		prepare: '',
 		close: '',
+		refresh: null,
 		gates: { cheap: [], expensive: [] },
 		docsOnly: [],
 		look: null,
@@ -20,17 +21,24 @@ test('fills the defaults', () => {
 test('names every field that is wrong', () => {
 	const e = (() => {
 		try {
-			resolve({ integration: '', close: 1, gates: ['x'], docsOnly: 'docs/**', look: { file: '.env.local' }, agent: { kind: 'codex' }, extra: 1 });
+			resolve({ integration: '', close: 1, refresh: { when: 'bun.lock' }, gates: ['x'], docsOnly: 'docs/**', look: { file: '.env.local' }, agent: { kind: 'codex' }, extra: 1 });
 		} catch (e) {
 			return e as Error;
 		}
 	})();
 	expect(e).toBeInstanceOf(ConfigError);
-	for (const field of ['extra: unknown field', 'integration:', 'close:', 'gates:', 'docsOnly:', 'look:', 'agent.kind:']) expect(e?.message).toContain(field);
+	for (const field of ['extra: unknown field', 'integration:', 'close:', 'refresh:', 'gates:', 'docsOnly:', 'look:', 'agent.kind:']) expect(e?.message).toContain(field);
 });
 
 test('takes a close command', () => {
 	expect(resolve({ integration: 'dev', close: ' bun run worktree --down ' }).close).toBe('bun run worktree --down');
+});
+
+test('takes a refresh, its globs and its command; one without both is refused', () => {
+	const refresh = { when: ['bun.lock', '**/package.json'], run: ' bun install --frozen-lockfile ' };
+	expect(resolve({ integration: 'dev', refresh }).refresh).toEqual({ when: refresh.when, run: 'bun install --frozen-lockfile' });
+	for (const bad of [{ when: refresh.when }, { run: refresh.run }, { when: [], run: refresh.run }, { when: refresh.when, run: ' ' }, null])
+		expect(() => resolve({ integration: 'dev', refresh: bad })).toThrow('refresh: { when: string[], run: string }');
 });
 
 let done = () => {};

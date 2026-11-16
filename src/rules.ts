@@ -45,6 +45,7 @@ export function renderRole(role: Role, c: Resolved, o: { kb?: boolean } = {}): s
 		cheap: codeList(c.gates.cheap),
 		touched: c.gates.expensive.length ? ` and, of the expensive ones (${codeList(c.gates.expensive)}), only the test files you touched` : '',
 		shipGates: shipGates(c),
+		refresh: refresh(c),
 		skip: skip(c)
 	}).trim();
 }
@@ -72,6 +73,14 @@ function skip(c: Resolved): string {
 function shipGates(c: Resolved): string {
 	if (!c.docsOnly.length || !c.gates.expensive.length) return 'every gate';
 	return `the cheap gates alone when every changed file is docs (${codeList(c.docsOnly)}), otherwise every gate`;
+}
+
+/** The ship's refresh, as a step of the orchestrator's ship line; nothing without one in the config. */
+function refresh(c: Resolved): string {
+	if (!c.refresh) return '';
+	const globs = c.refresh.when.map((g) => `\`${g}\``);
+	const last = globs.pop();
+	return `, runs \`${c.refresh.run}\` in the main checkout when the delivery changed ${globs.length ? `${globs.join(', ')} or ${last}` : last},`;
 }
 
 /**

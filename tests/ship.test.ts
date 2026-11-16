@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { resolve, type Config } from '../src/config';
 import { WfError } from '../src/context';
 import { checkouts } from '../src/git';
-import { closeWorktree, docsOnly, ship } from '../src/ship';
+import { closeWorktree, docsOnly, ship, watched } from '../src/ship';
 import { State } from '../src/state';
 import { slot } from '../src/lock';
 import { commit, fakeHerdr, git, repo, worktree, write, writer } from './helpers';
@@ -23,8 +23,8 @@ async function setup(o: { herdr?: Parameters<typeof fakeHerdr>[0]; files?: Recor
 	const wt = worktree(r.main, 'dash');
 	commit(wt, 'feat: dash', o.files ?? { 'dash.txt': 'dash\n' });
 	const c = (await checkouts(wt))!;
-	const run = (config: Config, extra: { dryRun?: boolean; fromMain?: boolean } = {}) =>
-		ship({ root: wt, main: c.main, commonDir: c.commonDir, config: resolve(config), state: new State(c.commonDir), name: 'dash', dryRun: !!extra.dryRun, fromMain: !!extra.fromMain });
+	const run = (config: Config, extra: { dryRun?: boolean; fromMain?: boolean; queued?: boolean } = {}) =>
+		ship({ root: wt, main: c.main, commonDir: c.commonDir, config: resolve(config), state: new State(c.commonDir), name: 'dash', dryRun: !!extra.dryRun, fromMain: !!extra.fromMain, queued: extra.queued });
 	return { ...r, wt, h, c, run, head: (ref: string) => git(r.main, 'rev-parse', ref) };
 }
 
@@ -102,6 +102,82 @@ test('a close that fails after the delivery says it is delivered, and leaves the
 	expect(message).toContain(`run \`exit 3\` in ${s.wt}, then \`bun wf close dash --delete-branch\``);
 	expect(existsSync(s.wt)).toBe(true);
 	expect(git(s.wt, 'branch', '--show-current')).toBe('worktree/dash');
+});
+
+const WATCHED = ['bun.lock', '**/package.json'];
+
+/** What `console.log` (or `console.error`) printed, from here to the end of the test. */
+function printed(stream: 'log' | 'error' = 'log'): () => string {
+	const spy = spyOn(console, stream);
+	cleanups.push(() => spy.mockRestore());
+	return () => spy.mock.calls.flat().join('\n');
+}
+
+test('refresh watches the lockfile at the root and a package.json at any depth', () => {
+	expect(watched(['package.json', 'apps/web/package.json', 'bun.lock', 'apps/bun.lock', 'src/x.ts'], WATCHED)).toEqual(['package.json', 'apps/web/package.json', 'bun.lock']);
+	expect(watched(['src/x.ts', 'README.md'], WATCHED)).toEqual([]);
+});
+
+test('a ship whose delivery changes a watched file runs refresh in the main checkout, under the ship lock and before the close, and leaves it clean', async () => {
+	const s = await setup({ files: { 'bun.lock': 'lock\n', 'dash.txt': 'dash\n' } });
+	// outside the repository: the refresh leaves the main checkout as git has it
+	const seen = join(s.dir, 'refresh.txt');
+	const held = join(s.c.commonDir, 'wf', 'ship.lock');
+	const out = printed();
+	const run = `{ pwd; git log -1 --format=%s; grep -q '^${process.pid} ' ${held} && echo locked; test -d ${s.wt} && echo open; } > ${seen}`;
+	await s.run({ integration: 'dev', refresh: { when: WATCHED, run } });
+	expect(readFileSync(seen, 'utf8')).toBe(`${s.main}\nfeat: dash\nlocked\nopen\n`);
+	expect(out()).toContain(`▶ ${run} (in the main checkout, ${s.main}: the delivery changed \`bun.lock\`)`);
+	expect(git(s.main, 'status', '--porcelain')).toBe('');
+	expect(existsSync(held)).toBe(false);
+	expect(existsSync(s.wt)).toBe(false);
+});
+
+test('a ship whose delivery changes no watched file runs no refresh and prints none', async () => {
+	const s = await setup();
+	const seen = join(s.dir, 'refresh.txt');
+	const out = printed();
+	await s.run({ integration: 'dev', refresh: { when: WATCHED, run: `touch ${seen}` } });
+	expect(git(s.main, 'log', '--format=%s', 'dev')).toContain('feat: dash');
+	expect(existsSync(seen)).toBe(false);
+	expect(out()).not.toContain(seen);
+});
+
+test('one of a queue leaves the refresh to the queue', async () => {
+	const s = await setup({ files: { 'bun.lock': 'lock\n' } });
+	const seen = join(s.dir, 'refresh.txt');
+	await s.run({ integration: 'dev', refresh: { when: WATCHED, run: `touch ${seen}` } }, { queued: true });
+	expect(git(s.main, 'log', '--format=%s', 'dev')).toContain('feat: dash');
+	expect(existsSync(seen)).toBe(false);
+});
+
+test('a refresh that fails leaves the delivery done and the worktree closed, and names the command to run', async () => {
+	const s = await setup({ files: { 'package.json': '{}\n' } });
+	const tip = s.head('worktree/dash');
+	const err = printed('error');
+	const message = await refused(s.run({ integration: 'dev', refresh: { when: WATCHED, run: 'exit 3' } }));
+	expect(message).toBe(`dev is at ${tip.slice(0, 9)} and the delivery is done, but \`exit 3\` failed in the main checkout: run \`cd ${s.main} && exit 3\``);
+	// said at once too, before the close: removing the workspace can end the ship
+	expect(err()).toContain(`✗ ${message}`);
+	expect(s.head('dev')).toBe(tip);
+	expect(git(s.main, 'branch', '--list', 'worktree/dash')).toBe('');
+	expect(existsSync(s.wt)).toBe(false);
+});
+
+test('a refresh that leaves changes in the main checkout fails too, naming them', async () => {
+	const s = await setup({ files: { 'bun.lock': 'lock\n' } });
+	const message = await refused(s.run({ integration: 'dev', refresh: { when: WATCHED, run: 'echo more >> bun.lock' } }));
+	expect(message).toContain(`but \`echo more >> bun.lock\` left changes in the main checkout: run \`cd ${s.main} && echo more >> bun.lock\``);
+	expect(message).toContain('left changed there, which the next ship refuses:\n   M bun.lock');
+	expect(existsSync(s.wt)).toBe(false);
+});
+
+test('a close that fails after a refresh that failed says both', async () => {
+	const s = await setup({ files: { 'bun.lock': 'lock\n' } });
+	const message = await refused(s.run({ integration: 'dev', close: 'exit 4', refresh: { when: WATCHED, run: 'exit 3' } }));
+	expect(message).toContain(`run \`exit 4\` in ${s.wt}, then \`bun wf close dash --delete-branch\``);
+	expect(message).toContain(`but \`exit 3\` failed in the main checkout: run \`cd ${s.main} && exit 3\``);
+	expect(existsSync(s.wt)).toBe(true);
 });
 
 test('closes through herdr when a workspace is open on the worktree, found by path', async () => {
@@ -352,4 +428,17 @@ test('--dry-run runs it all but the fast-forward and the close', async () => {
 	expect(s.head('dev')).toBe(before);
 	expect(existsSync(s.wt)).toBe(true);
 	expect(git(s.main, 'branch', '--list', 'worktree/dash')).toContain('worktree/dash');
+});
+
+test('--dry-run says whether the refresh would run, and which changed files call for it', async () => {
+	const out = printed();
+	const s = await setup({ files: { 'bun.lock': 'lock\n', 'dash.txt': 'dash\n' } });
+	const seen = join(s.dir, 'refresh.txt');
+	const refresh = { when: WATCHED, run: `touch ${seen}` };
+	await s.run({ integration: 'dev', refresh }, { dryRun: true });
+	expect(out()).toContain(`\`touch ${seen}\` would run there, since the delivery changes \`bun.lock\`; then`);
+	expect(existsSync(seen)).toBe(false);
+	const none = await setup();
+	await none.run({ integration: 'dev', refresh }, { dryRun: true });
+	expect(out()).toContain(`\`touch ${seen}\` would stay out, since the delivery changes no file refresh watches (\`bun.lock\`, \`**/package.json\`); and`);
 });

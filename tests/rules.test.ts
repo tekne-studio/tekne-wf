@@ -90,6 +90,17 @@ test('with docs-only paths, the ship runs in proportion to the diff', () => {
 	expect(orch(resolve({ integration: 'dev', docsOnly: ['docs/**'], gates: { cheap: ['bun run check'] } }))).toContain('runs every gate, fast-forwards');
 });
 
+test('with a refresh, the ship line names its command and the files that call for it', () => {
+	const gates = { cheap: ['bun run check'] };
+	expect(orch(resolve({ integration: 'main', gates, refresh: { when: ['bun.lock', '**/package.json'], run: 'bun install --frozen-lockfile' } }))).toContain(
+		'`bun wf ship <name>` brings `main` in, runs every gate, fast-forwards `main`, runs `bun install --frozen-lockfile` in the main checkout when the delivery changed `bun.lock` or `**/package.json`, and closes the worktree.'
+	);
+	expect(orch(resolve({ integration: 'main', gates, refresh: { when: ['a', 'b', 'c'], run: 'make' } }))).toContain('runs `make` in the main checkout when the delivery changed `a`, `b` or `c`, and closes');
+	expect(orch(resolve({ integration: 'main', gates, refresh: { when: ['bun.lock'], run: 'make' } }))).toContain('when the delivery changed `bun.lock`, and closes');
+	// without one, the line names no such step
+	expect(orch(resolve({ integration: 'main', gates }))).toContain('runs every gate, fast-forwards `main` and closes the worktree.');
+});
+
 test('the orchestrator commits a change with no behavior itself only where the ship would run the cheap gates alone', () => {
 	const look = '- Before each spawn, one look: when the change has no behavior (your records, such as a decision, a question, a roadmap or doc line';
 	const then = ' yourself, staging only its files (the person works here too), after the cheap gates and with no ship running (`bun wf status`, your background commands); anything else goes by `bun wf spawn`.';

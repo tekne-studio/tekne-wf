@@ -14,7 +14,9 @@
 //    default): worktrees of every repository share one CPU. Cheap gates run freely.
 // 4. Under the repository's ship lock, checks whether the integration branch moved during
 //    the gates: moved, back to 2; otherwise, fast-forward of the main checkout to the
-//    tested commit.
+//    tested commit. Under the same lock, runs the project's `refresh` in the main checkout
+//    when the delivery changed a file it watches; one that fails is printed, and the ship
+//    goes on to the close and exits 1. In a queue, the queue runs it once, after its last ship.
 // 5. Closes the worktree: stops every process still running in it, runs the project's
 //    `close` (one that fails stops here, with the delivery done), deletes the branch, then
 //    removes the worktree through herdr when it has an open workspace there, found by
@@ -43,6 +45,8 @@ export type ShipInput = {
 	dryRun: boolean;
 	/** run by the orchestrator, from the main checkout */
 	fromMain: boolean;
+	/** one of a queue, which runs the refresh itself, once, after its last ship */
+	queued?: boolean;
 };
 
 const short = (sha: string) => sha.slice(0, 9);
@@ -62,7 +66,7 @@ function fmt(ms: number): string {
 const EXIT: Record<string, number> = { SIGHUP: 129, SIGINT: 130, SIGTERM: 143 };
 
 /**
- * A shell command in the worktree, with its output on the terminal, in a process group of
+ * A shell command in a checkout, with its output on the terminal, in a process group of
  * its own: interrupting ship ends the whole group (a test stack's servers too), not only
  * its shell. With SIGTERM, so a runner such as Playwright stops what it started itself.
  */
@@ -100,6 +104,46 @@ export function docsOnly(files: string[], patterns: string[]): boolean {
 	if (!patterns.length || !files.length) return false;
 	const globs = patterns.map((p) => new Bun.Glob(p));
 	return files.every((f) => globs.some((g) => g.match(f)));
+}
+
+/** The changed files a glob of `when` matches: the ones that call for the refresh. */
+export function watched(files: string[], when: string[]): string[] {
+	const globs = when.map((p) => new Bun.Glob(p));
+	return files.filter((f) => globs.some((g) => g.match(f)));
+}
+
+/** The files a delivery from `base` to `head` changed that the config's `refresh` watches. */
+async function refreshFiles(dir: string, refresh: Resolved['refresh'], base: string, head: string): Promise<string[]> {
+	if (!refresh || base === head) return [];
+	return watched((await git(dir, 'diff', '--name-only', '--no-renames', base, head)).split('\n').filter(Boolean), refresh.when);
+}
+
+/** A few of the files by name, the rest as a count: a monorepo's delivery may change dozens. */
+const some = (files: string[]) => (files.length > 4 ? `${codeList(files.slice(0, 3))} and ${files.length - 3} more` : codeList(files));
+
+/**
+ * Brings the main checkout up to a delivery: runs the project's `refresh` there when the
+ * delivery, the integration branch from `base` to `head`, changed a file it watches. The
+ * caller holds the ship lock, so the next ship meets a main checkout already refreshed.
+ * A refresh that fails, or leaves changes there (the next ship refuses them), is printed
+ * at once and returned: the delivery is done, and the caller goes on and exits 1 with it.
+ */
+export async function refreshMain(o: { main: string; integration: string; refresh: Resolved['refresh']; base: string; head: string }): Promise<string> {
+	const files = await refreshFiles(o.main, o.refresh, o.base, o.head);
+	if (!o.refresh || !files.length) return '';
+	const { run } = o.refresh;
+	console.log(`\n▶ ${run} (in the main checkout, ${o.main}: the delivery changed ${some(files)})`);
+	const r = await sh(run, o.main);
+	const left = await git(o.main, 'status', '--porcelain');
+	if (r.ok && !left) {
+		console.log(`✓ ${run} (${fmt(r.ms)})`);
+		return '';
+	}
+	const what = r.ok ? 'left changes in the main checkout' : `failed in the main checkout${left ? ' and left changes there' : ''}`;
+	const changes = left ? `\nleft changed there, which the next ship refuses:\n${left.replace(/^/gm, '  ')}` : '';
+	const message = `${o.integration} is at ${short(o.head)} and the delivery is done, but \`${run}\` ${what}: run \`cd ${o.main} && ${run}\`${changes}`;
+	console.error(`\n✗ ${message}`);
+	return message;
 }
 
 /**
@@ -246,6 +290,7 @@ export async function ship(o: ShipInput): Promise<void> {
 
 		// --- 2 to 4. Merge, gates, fast-forward -----------------------------------
 		let tested = '';
+		let refreshFailed = '';
 		for (;;) {
 			const base = await git(o.root, 'rev-parse', I);
 			console.log(`\n▶ git merge ${I} (${short(base)})`);
@@ -328,13 +373,26 @@ export async function ship(o: ShipInput): Promise<void> {
 				release();
 				const ws = await workspaceFor(o.root);
 				console.log(`\n--dry-run: ${I} would go from ${short(base)} to ${short(tested)} in the main checkout; then`);
+				if (o.config.refresh) {
+					const calls = await refreshFiles(o.root, o.config.refresh, base, tested);
+					const when = o.queued ? ", once, after the queue's last ship" : '';
+					console.log(
+						calls.length
+							? `\`${o.config.refresh.run}\` would run there${when}, since the delivery changes ${some(calls)}; then`
+							: `\`${o.config.refresh.run}\` would stay out, since the delivery changes no file refresh watches (${codeList(o.config.refresh.when)}); and`
+					);
+				}
 				console.log(`${o.config.close ? `${o.config.close} would run, ` : ''}the branch ${branch} would go and the worktree would close ${ws ? `through herdr (workspace ${ws})` : 'with git worktree remove'}. (${fmt(performance.now() - started)})`);
 				return;
 			}
-			const ff = await gitLoud(o.main, 'merge', '--ff-only', tested);
-			release();
-			if (!ff) fail(`the fast-forward of ${I} failed`);
-			console.log(`\n✓ ${I} at ${short(tested)}`);
+			try {
+				if (!(await gitLoud(o.main, 'merge', '--ff-only', tested))) fail(`the fast-forward of ${I} failed`);
+				console.log(`\n✓ ${I} at ${short(tested)}`);
+				// before the close: removing the workspace ends a ship run from the worktree's own pane
+				if (!o.queued) refreshFailed = await refreshMain({ main: o.main, integration: I, refresh: o.config.refresh, base, head: tested });
+			} finally {
+				release();
+			}
 			break;
 		}
 
@@ -343,21 +401,24 @@ export async function ship(o: ShipInput): Promise<void> {
 		// read the worktree as gone. `close` runs while the worktree is on its branch: one
 		// that fails leaves it where `wf close <name>`, which finds it by branch, reaches it.
 		if (o.name) o.state.forget(o.name);
+		// a refusal while closing carries the refresh's failure too: the last lines say all that is left to do
+		const stop = (message: string) => fail(refreshFailed ? `${message}\n${refreshFailed}` : message);
 		const { ws, closed } = await beforeRemoval(o.root, o.config.close);
-		if (!closed) fail(`${I} is already at ${short(tested)}, but ${closeFailed(o.config.close, o.root, o.name ? `bun wf close ${o.name} --delete-branch` : `git worktree remove ${o.root}`)}`);
+		if (!closed) stop(`${I} is already at ${short(tested)}, but ${closeFailed(o.config.close, o.root, o.name ? `bun wf close ${o.name} --delete-branch` : `git worktree remove ${o.root}`)}`);
 		// Removing the workspace ends the processes in its panes, this one too when ship runs
 		// in the worktree's own pane: the branch goes first, with the worktree on a detached
 		// HEAD at the same commit, and the removal is the very last step.
 		if (!(await gitLoud(o.root, 'switch', '--quiet', '--detach')))
-			fail(`${I} is already at ${short(tested)}, but the worktree's HEAD did not detach; delete the branch and close the worktree by hand`);
+			stop(`${I} is already at ${short(tested)}, but the worktree's HEAD did not detach; delete the branch and close the worktree by hand`);
 		if (!(await gitLoud(o.main, 'branch', '-d', branch))) {
 			await gitLoud(o.root, 'switch', '--quiet', branch);
-			fail(`${I} is already at ${short(tested)}, but the branch ${branch} did not go`);
+			stop(`${I} is already at ${short(tested)}, but the branch ${branch} did not go`);
 		}
 		console.log(`✓ branch ${branch} deleted`);
 		console.log(`(${fmt(performance.now() - started)})`);
 		await removeWorktree(o.root, o.main, false, ws);
 		console.log('✓ worktree closed');
+		if (refreshFailed) fail(refreshFailed);
 	} finally {
 		unmark();
 	}
