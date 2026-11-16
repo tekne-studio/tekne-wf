@@ -11,6 +11,12 @@ What `wf` changes next, in order: each item says when it is done and leaves the 
 
 ## Now
 
+### A ship that changes the lockfile leaves the main checkout installed
+
+On 2026-11-16 a project shipped a branch that added a dependency: the gates passed in the worktree, where `prepare` had installed it, and the fast-forward brought the new lockfile to the main checkout, whose `node_modules` stayed as it was. The next command there failed to resolve the import until a `bun install --frozen-lockfile` by hand. wf names no package manager, so the project declares the step: `refresh` in `wf.config.ts`, the globs it watches and the command, which `ship` runs in the main checkout after the fast-forward, under the ship lock, only when the delivery changed a watched file; a queue runs it once, at its end. One that fails says the delivery is done and prints the command to run.
+
+**Done when:** a test shows a ship whose delivery changes a watched file leaving the main checkout refreshed, and a ship that changes none running nothing; `ship.md`, the spec and `bun wf --skill` say it, and the CHANGELOG has the entry.
+
 ### `wf init` gives a project its worktree `prepare`
 
 Installing wf at the platform cost most of its time in the project's `prepare`: each worktree's own data and ports, which the site wrote again (its own worktree script: a port slot per worktree, `.env.local`, links to the main checkout's `.env` and binaries, a copy of the database). `wf init` writes `wf.config.ts` and a `prepare` with the generic parts, leaving the data copy as the one function a project writes. The design is `prepare-proposal.md`, its six choices Marlus's (2026-10-25).
