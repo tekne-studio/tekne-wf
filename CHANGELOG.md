@@ -4,7 +4,9 @@ Versions follow semver; the commit type is the bump (`feat` minor, `fix`
 patch, a breaking change minor while below 1.0). Entries are distilled from
 the commits.
 
-## Unreleased
+## 0.11.0
+
+A ship that brings a new lockfile leaves the main checkout installed: `refresh` in `wf.config.ts` runs a command there when the delivery changed a watched file, so the next test run on the integration branch finds its packages.
 
 ### Added
 
